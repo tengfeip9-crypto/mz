@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>QQ 空间远程登录</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">QZONE REMOTE LOGIN</p>
+        <h1>远程唤起浏览器</h1>
+        <p class="subcopy">点击按钮后，服务器会打开一个独立浏览器，并把当前登录相关的真实板块返回到这个网页里，方便你直接远程操作。</p>
+      </div>
+      <button id="launchBtn" class="primary-button">唤起浏览器</button>
+    </header>
+
+    <section id="authSection" class="panel auth-panel">
+      <div class="panel-head">
+        <div>
+          <h2>网站账号</h2>
+          <p>只有登录网站账号后，才能继续使用远程浏览器、整页操作和自动点赞功能。</p>
+        </div>
+        <span id="authBadge" class="badge badge-idle">未登录</span>
+      </div>
+
+      <p id="authCurrentUser" class="session-meta hidden"></p>
+
+      <div id="authFormBlock" class="auth-grid">
+        <label class="field">
+          <span>1：CN（纯文字形式，不要加入特殊字符）：</span>
+          <input id="authCn" type="text" maxlength="24" placeholder="请输入 CN">
+        </label>
+        <label class="field">
+          <span>2：密码（4位数字）：</span>
+          <input id="authPassword" type="password" inputmode="numeric" maxlength="4" placeholder="请输入 4 位数字密码">
+        </label>
+      </div>
+
+      <div class="auth-actions">
+        <button id="registerBtn" class="primary-button" type="button">注册并登录</button>
+        <button id="loginBtn" class="secondary-button" type="button">登录网站账号</button>
+        <button id="logoutBtn" class="secondary-button hidden" type="button">退出网站账号</button>
+      </div>
+
+      <p id="authStatus" class="status-text">请先注册或登录网站账号。</p>
+    </section>
+
+    <section id="recordsSection" class="panel hidden">
+      <div class="panel-head">
+        <div>
+          <h2>用户记录</h2>
+          <p>这里会返回当前网站账号对应的独立存储区域和最近使用记录，方便你确认自己拿到的是哪一份数据。</p>
+        </div>
+        <span class="tip">按网站账号隔离</span>
+      </div>
+
+      <p id="recordsSummary" class="status-text">当前还没有可显示的用户记录。</p>
+      <p id="recordsPath" class="status-url"></p>
+      <pre id="recordsOutput" class="records-output">等待登录网站账号。</pre>
+    </section>
+
+    <section class="status-card">
+      <div class="status-top">
+        <span id="statusBadge" class="badge badge-idle">等待唤起</span>
+        <span id="statusUrl" class="status-url">尚未启动远程浏览器</span>
+      </div>
+      <p id="sessionMeta" class="session-meta">当前还没有独立会话。每次点击按钮都会新建一个只属于当前页面的浏览器会话。</p>
+      <a id="sessionLink" class="session-link hidden" href="#" target="_blank" rel="noreferrer">打开当前会话链接</a>
+      <div class="session-actions">
+        <button id="closeSessionBtn" class="secondary-button hidden" type="button">退出当前会话</button>
+      </div>
+      <p id="statusText" class="status-text">等待你手动唤起浏览器。当前页面只保留测试需要的最小登录功能。</p>
+    </section>
+
+    <section id="mappingSection" class="panel hidden">
+        <div class="panel-head">
+          <div>
+          <h2>登录板块</h2>
+          <p id="panelMeta">正在等待服务器返回登录板块...</p>
+          </div>
+        <span class="tip">点击画面后即可输入</span>
+      </div>
+
+      <section id="loginWorkbench" class="login-workbench">
+        <div class="login-workbench-head">
+          <div>
+            <h3>登录工作台</h3>
+            <p id="loginSummary" class="status-text">浏览器会自动切到 QQ 密码登录页，当前由用户在返回的登录板块中自行完成登录。</p>
+          </div>
+          <span id="loginPhaseBadge" class="badge badge-login_required">登录处理中</span>
+        </div>
+
+        <div id="loginStepGrid" class="login-step-grid"></div>
+
+        <div class="login-meta-grid">
+          <div class="login-meta-card">
+            <span class="login-meta-label">当前模式</span>
+            <strong id="loginModeValue">等待识别</strong>
+          </div>
+          <div class="login-meta-card">
+            <span class="login-meta-label">验证状态</span>
+            <strong id="loginVerifyValue">待确认</strong>
+          </div>
+          <div class="login-meta-card">
+            <span class="login-meta-label">页面状态</span>
+            <strong id="loginPageValue">待加载</strong>
+          </div>
+          <div class="login-meta-card">
+            <span class="login-meta-label">下一步</span>
+            <strong id="loginNextValue">等待唤起浏览器</strong>
+          </div>
+        </div>
+
+        <div id="loginAlert" class="login-alert hidden"></div>
+      </section>
+
+      <div class="frame-shell">
+        <img id="frameImage" alt="QQ空间登录板块映射" draggable="false">
+      </div>
+
+      <div class="toolbox">
+        <p id="qqLoginStatus" class="status-text">浏览器会自动打开到 QQ 密码登录页，接下来请直接在上面的登录板块中完成登录。若出现验证码、手机验证或机器人验证，也请直接在该板块中处理。</p>
+        <div class="keyboard-toolbar">
+          <button id="focusKeyboardBtn" class="secondary-button" type="button">激活键盘输入</button>
+          <span id="keyboardState" class="keyboard-state">先点击上方登录板块中的账号或密码输入框，再直接键入内容。</span>
+        </div>
+        <p class="bridge-tip">删除、回车、方向键、长按拖动、滚轮与触摸操作都会转发到浏览器当前对应的位置。</p>
+        <textarea id="textBridge" class="keyboard-bridge" rows="1" aria-hidden="true" tabindex="-1"></textarea>
+      </div>
+    </section>
+
+    <section id="successSection" class="panel success-panel hidden">
+      <h2>登录成功</h2>
+      <p>已经检测到浏览器登录完成，登录面板已自动收起。当前测试站点的最小登录链路已经走通。</p>
+    </section>
+
+    <section id="autoLikeSection" class="panel hidden">
+      <div class="panel-head">
+        <div>
+          <h2>自动点赞</h2>
+          <p>这个控制面板只会作用在当前会话绑定的浏览器上，不会影响其他设备或其他账号。</p>
+        </div>
+        <span class="tip">登录成功后可启动</span>
+      </div>
+
+      <div class="auto-like-grid">
+        <label class="field">
+          <span>最大大轮数</span>
+          <input id="autoLikeMaxBigRounds" type="number" min="1" placeholder="留空表示持续运行">
+        </label>
+        <label class="field">
+          <span>每小轮最多点赞数</span>
+          <input id="autoLikeMaxLikes" type="number" min="1" placeholder="例如 20">
+        </label>
+        <label class="field">
+          <span>大轮间隔秒数</span>
+          <input id="autoLikeWaitSeconds" type="number" min="0" step="1" value="60">
+        </label>
+        <label class="checkbox-row">
+          <input id="autoLikeSkipTasks" type="checkbox" checked>
+          <span>只跑点赞，不触发外部脚本</span>
+        </label>
+      </div>
+
+      <div class="auto-like-actions">
+        <button id="startAutoLikeBtn" class="primary-button" type="button">开始自动点赞</button>
+        <button id="stopAutoLikeBtn" class="secondary-button" type="button">停止自动点赞</button>
+      </div>
+
+      <p id="autoLikeStatus" class="status-text">登录成功后，这里可以启动当前会话的自动点赞任务。</p>
+      <p id="autoLikeLogPath" class="status-url hidden"></p>
+    </section>
+
+    <section id="consoleSection" class="panel console-panel">
+      <div class="panel-head">
+        <div>
+          <h2>实时控制台</h2>
+          <p>这里会显示当前会话的线程状态和最近输出的控制台文本，方便你实时观察运行情况。</p>
+        </div>
+        <span id="threadSummary" class="tip">等待会话</span>
+      </div>
+
+      <pre id="consoleOutput" class="console-output">等待创建会话。</pre>
+    </section>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

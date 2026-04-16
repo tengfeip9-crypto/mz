@@ -1,0 +1,32 @@
+# Local configuration
+.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+
+# IDE / editor
+.idea/
+.vscode/
+
+# Runtime data
+.local/
+friend_data/
+run_logs/
+remote_login_data/
+
+# Local binaries
+driver/
+cloudflared.exe
+
+# OS files
+.DS_Store
+Thumbs.db
