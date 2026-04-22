@@ -2,6 +2,8 @@
 .env
 .env.local
 mz_user_settings.json
+portable_app/.env
+portable_app/mz_user_settings.json
 
 # Python
 __pycache__/
@@ -23,12 +25,17 @@ env/
 friend_data/
 run_logs/
 remote_login_data/
+portable_app/.local/
+portable_app/friend_data/
+portable_app/run_logs/
+portable_app/remote_login_data/
 
 # Local binaries
 driver/
 cloudflared.exe
 mz_control_panel.exe
 build/
+!portable_app/MZ_Control_Panel.exe
 
 # OS files
 .DS_Store
