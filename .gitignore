@@ -1,6 +1,7 @@
 # Local configuration
 .env
 .env.local
+mz_user_settings.json
 
 # Python
 __pycache__/
@@ -26,6 +27,8 @@ remote_login_data/
 # Local binaries
 driver/
 cloudflared.exe
+mz_control_panel.exe
+build/
 
 # OS files
 .DS_Store

@@ -28,6 +28,7 @@ from project_config import (  # noqa: E402
     QQ_NUMBER,
     require_qq_number,
 )
+from mz_user_settings import load_settings  # noqa: E402
 
 # ========= 配置 =========
 CHROME_DRIVER_PATH = os.fspath(DEFAULT_CHROMEDRIVER_PATH)
@@ -558,9 +559,20 @@ def 执行自动说说任务(
     return 0
 
 
+def 执行保存的自动说说任务() -> int:
+    settings = load_settings()
+    return 执行自动说说任务(
+        content=settings.auto_post_content,
+        image_paths=settings.auto_post_images,
+        wait_seconds=settings.auto_post_wait_seconds,
+        delete_after_post=settings.auto_post_delete_after_post,
+    )
+
+
 def 解析命令行参数():
+    settings = load_settings()
     parser = argparse.ArgumentParser(description="自动发表 QQ 空间说说，支持配图。")
-    parser.add_argument("--content", default=内容, help="说说正文")
+    parser.add_argument("--content", default=settings.auto_post_content, help="说说正文")
     parser.add_argument(
         "--image",
         action="append",
@@ -571,7 +583,7 @@ def 解析命令行参数():
     parser.add_argument(
         "--wait-seconds",
         type=float,
-        default=等待秒数,
+        default=settings.auto_post_wait_seconds,
         help="发表后等待多少秒再删除，仅在未开启 --keep 时生效",
     )
     parser.add_argument(
@@ -584,14 +596,15 @@ def 解析命令行参数():
 
 def main():
     args = 解析命令行参数()
-    image_paths = args.images if args.images is not None else 默认图片路径列表
+    settings = load_settings()
+    image_paths = args.images if args.images is not None else settings.auto_post_images
 
     try:
         return 执行自动说说任务(
             content=args.content,
             image_paths=image_paths,
             wait_seconds=args.wait_seconds,
-            delete_after_post=not args.keep and 发表后删除,
+            delete_after_post=not args.keep and settings.auto_post_delete_after_post,
         )
     except Exception as exc:
         print(f"自动说说失败: {exc}")

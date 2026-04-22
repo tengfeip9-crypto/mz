@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 import random
-import subprocess
 import sys
+import threading
 import time
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -23,6 +24,7 @@ if str(PROJECT_ROOT_PATH) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT_PATH))
 
 from project_config import CHROMEDRIVER_PATH, DEBUGGER_ADDRESS  # noqa: E402
+from mz_user_settings import load_settings  # noqa: E402
 
 MODULE_DIR = os.fspath(MODULE_DIR_PATH)
 
@@ -118,6 +120,40 @@ class LikeStats:
 
 
 CONFIG = AppConfig()
+
+
+def 应用持久化配置(base_config: AppConfig) -> AppConfig:
+    config = deepcopy(base_config)
+    settings = load_settings()
+    config.tasks.auto_post_interval_big_rounds = settings.auto_post_interval_big_rounds
+    config.tasks.friend_compare_interval_big_rounds = settings.friend_compare_interval_big_rounds
+    config.tasks.friend_save_interval_big_rounds = settings.friend_save_interval_big_rounds
+    config.loop.wait_between_big_rounds_seconds = settings.wait_between_big_rounds_seconds
+    return config
+
+
+def _执行内部任务(script_name: str) -> int:
+    if script_name == "ds.py":
+        module = importlib.import_module("mz_core.ds")
+        return int(module.执行保存的自动说说任务())
+    if script_name == "jc.py":
+        module = importlib.import_module("mz_core.jc")
+        result = module.主程序()
+        return 0 if result in (None, 0) else int(result)
+    if script_name == "db.py":
+        module = importlib.import_module("mz_core.db")
+        result = module.主程序()
+        return 0 if result in (None, 0) else int(result)
+    raise FileNotFoundError(script_name)
+
+
+def 等待可中断(seconds: float, stop_event: Optional[threading.Event] = None) -> bool:
+    if seconds <= 0:
+        return False
+    if stop_event is None:
+        time.sleep(seconds)
+        return False
+    return stop_event.wait(seconds)
 
 
 def 获取页面文本片段(driver: webdriver.Chrome, limit: int = 600) -> str:
@@ -225,9 +261,11 @@ def 点击元素(driver: webdriver.Chrome, element, desc: str) -> bool:
 
 def 运行外部脚本(script_name: str, success_msg: str, fail_prefix: str) -> bool:
     script_path = os.path.join(MODULE_DIR, script_name)
-    print(f"调用脚本: {script_path}")
+    print(f"调用任务: {script_name}")
 
-    if not os.path.exists(script_path):
+    try:
+        returncode = _执行内部任务(script_name)
+    except FileNotFoundError:
         print(f"{fail_prefix}: 脚本不存在")
         记录异常现象(
             category="外部脚本异常",
@@ -237,13 +275,6 @@ def 运行外部脚本(script_name: str, success_msg: str, fail_prefix: str) -> 
             dedupe_key=f"missing_script:{script_name}",
         )
         return False
-
-    try:
-        result = subprocess.run(
-            [sys.executable, script_path],
-            cwd=MODULE_DIR,
-            check=False,
-        )
     except Exception as exc:
         print(f"{fail_prefix}: {exc}")
         记录异常现象(
@@ -255,17 +286,17 @@ def 运行外部脚本(script_name: str, success_msg: str, fail_prefix: str) -> 
         )
         return False
 
-    if result.returncode == 0:
+    if returncode == 0:
         print(success_msg)
         return True
 
-    print(f"{fail_prefix}: 退出码 {result.returncode}")
+    print(f"{fail_prefix}: 退出码 {returncode}")
     记录异常现象(
         category="外部脚本异常",
         reason="外部脚本返回非 0 退出码。",
-        symptom=f"{script_name} 执行失败，程序收到退出码 {result.returncode}。",
-        extra={"script_name": script_name, "script_path": script_path, "returncode": result.returncode},
-        dedupe_key=f"run_script_failed:{script_name}:{result.returncode}",
+        symptom=f"{script_name} 执行失败，程序收到退出码 {returncode}。",
+        extra={"script_name": script_name, "script_path": script_path, "returncode": returncode},
+        dedupe_key=f"run_script_failed:{script_name}:{returncode}",
     )
     return False
 
@@ -977,11 +1008,19 @@ def 打印配置摘要(config: AppConfig) -> None:
     )
 
 
-def 自动点赞循环(driver: webdriver.Chrome, config: AppConfig) -> None:
+def 自动点赞循环(
+    driver: webdriver.Chrome,
+    config: AppConfig,
+    stop_event: Optional[threading.Event] = None,
+) -> None:
     big_round_count = 0
     refresh_fail_count = 0
 
     while True:
+        if stop_event is not None and stop_event.is_set():
+            print("\n收到停止信号，程序准备退出。")
+            break
+
         if config.loop.max_big_rounds is not None and big_round_count >= config.loop.max_big_rounds:
             print(f"\n已达到设定的大轮上限 {config.loop.max_big_rounds}，程序退出")
             break
@@ -991,6 +1030,10 @@ def 自动点赞循环(driver: webdriver.Chrome, config: AppConfig) -> None:
         idle_small_rounds = 0
 
         for small_round_index in range(config.loop.max_small_rounds):
+            if stop_event is not None and stop_event.is_set():
+                print("\n收到停止信号，本大轮提前结束。")
+                break
+
             print(f"\n--- 第 {small_round_index + 1} 小轮扫描点赞 ---")
             监控当前异常场景(
                 driver,
@@ -1041,18 +1084,26 @@ def 自动点赞循环(driver: webdriver.Chrome, config: AppConfig) -> None:
                 break
 
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(config.loop.scroll_pause_seconds)
+            if 等待可中断(config.loop.scroll_pause_seconds, stop_event):
+                print("\n收到停止信号，停止滚动等待。")
+                break
 
         回到顶部(driver, config.selectors)
         refresh_fail_count = 刷新动态页(driver, refresh_fail_count, config)
         处理定时任务(driver, big_round_count, config)
+
+        if stop_event is not None and stop_event.is_set():
+            print("\n收到停止信号，程序退出。")
+            break
 
         if config.loop.max_big_rounds is not None and big_round_count >= config.loop.max_big_rounds:
             print(f"\n已完成设定的 {config.loop.max_big_rounds} 大轮，程序退出")
             break
 
         print(f"等待 {config.loop.wait_between_big_rounds_seconds} 秒后开始下一大轮...\n")
-        time.sleep(config.loop.wait_between_big_rounds_seconds)
+        if 等待可中断(config.loop.wait_between_big_rounds_seconds, stop_event):
+            print("\n收到停止信号，结束大轮等待。")
+            break
 
 
 def 构建参数解析器() -> argparse.ArgumentParser:
@@ -1134,22 +1185,31 @@ def 应用命令行配置(base_config: AppConfig, args: argparse.Namespace) -> A
     return config
 
 
-def main(argv: Optional[list[str]] = None) -> None:
-    parser = 构建参数解析器()
-    args = parser.parse_args(argv)
-    config = 应用命令行配置(CONFIG, args)
-
+def 运行自动点赞(
+    config: AppConfig,
+    stop_event: Optional[threading.Event] = None,
+) -> int:
     打印配置摘要(config)
 
     try:
         driver = 连接浏览器(config.browser)
-        time.sleep(config.browser.startup_wait_seconds)
+        if 等待可中断(config.browser.startup_wait_seconds, stop_event):
+            print("\n启动等待阶段收到停止信号，程序退出。")
+            return 0
         print("\n准备开始自动点赞...\n")
-        自动点赞循环(driver, config)
+        自动点赞循环(driver, config, stop_event=stop_event)
+        return 0
     except Exception as exc:
         print(f"\n程序异常退出: {exc}")
-        raise
+        return 1
+
+
+def main(argv: Optional[list[str]] = None, stop_event: Optional[threading.Event] = None) -> int:
+    parser = 构建参数解析器()
+    args = parser.parse_args(argv)
+    config = 应用命令行配置(应用持久化配置(CONFIG), args)
+    return 运行自动点赞(config, stop_event=stop_event)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

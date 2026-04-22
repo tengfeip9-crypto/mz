@@ -3,7 +3,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+from app_runtime import APP_BASE_DIR, BUNDLE_ROOT
+
+PROJECT_ROOT = APP_BASE_DIR
 LOCAL_STATE_ROOT = PROJECT_ROOT / ".local"
 DEFAULT_ENV_FILES = (PROJECT_ROOT / ".env", PROJECT_ROOT / ".env.local")
 
@@ -53,12 +55,25 @@ def _runtime_dir(env_name: str, hidden_name: str, legacy_name: str) -> Path:
     return LOCAL_STATE_ROOT / hidden_name
 
 
+def _default_chromedriver_path() -> Path:
+    driver_name = "chromedriver.exe" if os.name == "nt" else "chromedriver"
+    candidates = [
+        PROJECT_ROOT / "driver" / driver_name,
+        BUNDLE_ROOT / "driver" / driver_name,
+        BUNDLE_ROOT / driver_name,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return PROJECT_ROOT / "driver" / driver_name
+
+
 DEBUGGER_ADDRESS = os.environ.get("MZ_DEBUGGER_ADDRESS", "127.0.0.1:9222").strip() or "127.0.0.1:9222"
 QQ_NUMBER = os.environ.get("MZ_QQ_NUMBER", "").strip()
 
 CHROMEDRIVER_PATH = _resolve_path(
     os.environ.get("MZ_CHROMEDRIVER_PATH"),
-    PROJECT_ROOT / "driver" / ("chromedriver.exe" if os.name == "nt" else "chromedriver"),
+    _default_chromedriver_path(),
 )
 CHROME_PATH = _resolve_path(
     os.environ.get("MZ_CHROME_PATH"),
