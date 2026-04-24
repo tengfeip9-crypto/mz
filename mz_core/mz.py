@@ -101,12 +101,24 @@ class LikeConfig:
 
 
 @dataclass
+class ForwardConfig:
+    enabled: bool = False
+    watch_uins: list[str] = field(default_factory=list)
+    keyword: str = "转发"
+    append_text: str = "测试内容"
+    include_forwarded_feeds: bool = False
+    scan_limit_per_small_round: int = 30
+    max_new_forwards_per_small_round: int = 1
+
+
+@dataclass
 class AppConfig:
     browser: BrowserConfig = field(default_factory=BrowserConfig)
     tasks: TaskConfig = field(default_factory=TaskConfig)
     selectors: SelectorConfig = field(default_factory=SelectorConfig)
     loop: LoopConfig = field(default_factory=LoopConfig)
     like: LikeConfig = field(default_factory=LikeConfig)
+    forward: ForwardConfig = field(default_factory=ForwardConfig)
 
 
 @dataclass
@@ -129,6 +141,11 @@ def 应用持久化配置(base_config: AppConfig) -> AppConfig:
     config.tasks.friend_compare_interval_big_rounds = settings.friend_compare_interval_big_rounds
     config.tasks.friend_save_interval_big_rounds = settings.friend_save_interval_big_rounds
     config.loop.wait_between_big_rounds_seconds = settings.wait_between_big_rounds_seconds
+    config.forward.enabled = settings.auto_forward_enabled
+    config.forward.watch_uins = list(settings.auto_forward_target_uins)
+    config.forward.keyword = settings.auto_forward_keyword
+    config.forward.append_text = settings.auto_forward_append_text
+    config.forward.include_forwarded_feeds = settings.auto_forward_include_forwarded_feeds
     return config
 
 
@@ -238,8 +255,14 @@ def 监控当前异常场景(driver: webdriver.Chrome, config: AppConfig, stage:
 def 连接浏览器(browser_config: BrowserConfig) -> webdriver.Chrome:
     chrome_options = Options()
     chrome_options.add_experimental_option("debuggerAddress", browser_config.debugger_address)
-    service = Service(browser_config.driver_path)
-    return webdriver.Chrome(service=service, options=chrome_options)
+
+    driver_path = (browser_config.driver_path or "").strip()
+    if driver_path and os.path.exists(driver_path):
+        service = Service(driver_path)
+        return webdriver.Chrome(service=service, options=chrome_options)
+
+    # 当本地没有打包好的 chromedriver 时，交给 Selenium Manager 自动解析驱动。
+    return webdriver.Chrome(options=chrome_options)
 
 
 def 点击元素(driver: webdriver.Chrome, element, desc: str) -> bool:
@@ -962,6 +985,35 @@ def 执行点赞(driver: webdriver.Chrome, config: AppConfig) -> LikeStats:
     return stats
 
 
+def 执行自动转发(driver: webdriver.Chrome, config: AppConfig) -> dict:
+    if not config.forward.enabled or not config.forward.watch_uins:
+        return {
+            "enabled": False,
+            "scanned": 0,
+            "matched": 0,
+            "already_forwarded": 0,
+            "attempted": 0,
+            "forwarded": 0,
+            "errors": 0,
+        }
+
+    try:
+        from mz_core.feed_forward import 执行自动转发候选动态
+    except ModuleNotFoundError:
+        from feed_forward import 执行自动转发候选动态
+
+    return 执行自动转发候选动态(
+        driver=driver,
+        watch_uins=config.forward.watch_uins,
+        keyword=config.forward.keyword,
+        append_text=config.forward.append_text,
+        include_forwarded_feeds=config.forward.include_forwarded_feeds,
+        scan_limit=config.forward.scan_limit_per_small_round,
+        max_forwards=config.forward.max_new_forwards_per_small_round,
+        dry_run=False,
+    )
+
+
 def 处理定时任务(driver: webdriver.Chrome, big_round_count: int, config: AppConfig) -> None:
     if (
         config.tasks.auto_post_interval_big_rounds > 0
@@ -1006,6 +1058,20 @@ def 打印配置摘要(config: AppConfig) -> None:
         f"好友保存/{config.tasks.friend_save_interval_big_rounds}, "
         f"好友对比/{config.tasks.friend_compare_interval_big_rounds}"
     )
+    if config.forward.enabled and config.forward.watch_uins:
+        print(
+            f"  自动转发: 已启用, 目标QQ {len(config.forward.watch_uins)} 个, "
+            f"关键词“{config.forward.keyword or '不限'}”, 附加文案“{config.forward.append_text}”, "
+            f"列表转发动态{'允许' if config.forward.include_forwarded_feeds else '不转发'}"
+        )
+    elif config.forward.enabled:
+        print(
+            f"  自动转发: 已启用, 目标QQ 不限, "
+            f"关键词“{config.forward.keyword or '不限'}”, 附加文案“{config.forward.append_text}”, "
+            f"列表转发动态{'允许' if config.forward.include_forwarded_feeds else '不转发'}"
+        )
+    else:
+        print("  自动转发: 未启用")
 
 
 def 自动点赞循环(
@@ -1056,6 +1122,26 @@ def 自动点赞循环(
                         driver=driver,
                         selectors=config.selectors,
                         dedupe_key="recover_praise_flow_failed",
+                    )
+
+            forward_stats = 执行自动转发(driver, config)
+            if forward_stats.get("enabled"):
+                print(
+                    "本小轮转发："
+                    f"扫描 {forward_stats.get('scanned', 0)} / "
+                    f"命中 {forward_stats.get('matched', 0)} / "
+                    f"已跳过 {forward_stats.get('already_forwarded', 0)} / "
+                    f"尝试 {forward_stats.get('attempted', 0)} / "
+                    f"成功 {forward_stats.get('forwarded', 0)} / "
+                    f"错误 {forward_stats.get('errors', 0)}"
+                )
+                for item in forward_stats.get("preview", [])[:2]:
+                    print(
+                        "  转发候选："
+                        f"{item.get('actor_name') or '(未知作者)'} "
+                        f"actor={item.get('actor_uin') or '-'} "
+                        f"[{item.get('card_type') or 'unknown'}]"
+                        f"{' 已转发过' if item.get('already_forwarded') else ''}"
                     )
 
             like_stats = 执行点赞(driver, config)
@@ -1145,6 +1231,11 @@ def 构建参数解析器() -> argparse.ArgumentParser:
         action="store_true",
         help="本次运行跳过全部外部脚本任务",
     )
+    parser.add_argument(
+        "--skip-auto-forward",
+        action="store_true",
+        help="本次运行不执行动态自动转发",
+    )
     return parser
 
 
@@ -1181,6 +1272,9 @@ def 应用命令行配置(base_config: AppConfig, args: argparse.Namespace) -> A
             config.tasks.friend_save_interval_big_rounds = 0
         if args.skip_friend_compare:
             config.tasks.friend_compare_interval_big_rounds = 0
+
+    if args.skip_auto_forward:
+        config.forward.enabled = False
 
     return config
 

@@ -34,8 +34,8 @@ class MZControlPanel:
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.title("MZ 总控面板")
-        self.root.geometry("1080x860")
-        self.root.minsize(980, 760)
+        self.root.geometry("1080x940")
+        self.root.minsize(980, 820)
 
         self.output_queue: "queue.Queue[tuple[str, object]]" = queue.Queue()
         self.worker_thread: threading.Thread | None = None
@@ -54,18 +54,28 @@ class MZControlPanel:
         self.big_round_sleep_var = tk.StringVar(value=str(settings.wait_between_big_rounds_seconds))
         self.auto_post_wait_var = tk.StringVar(value=str(settings.auto_post_wait_seconds))
         self.delete_after_post_var = tk.BooleanVar(value=settings.auto_post_delete_after_post)
+        self.auto_forward_enabled_var = tk.BooleanVar(value=settings.auto_forward_enabled)
+        self.auto_forward_keyword_var = tk.StringVar(value=settings.auto_forward_keyword)
+        self.auto_forward_append_text_var = tk.StringVar(value=settings.auto_forward_append_text)
+        self.auto_forward_include_forwarded_var = tk.BooleanVar(
+            value=settings.auto_forward_include_forwarded_feeds
+        )
         self.status_var = tk.StringVar(value="就绪")
         self.image_summary_var = tk.StringVar(value="未配置图片")
 
         self.auto_post_content: tk.Text | None = None
         self.image_listbox: tk.Listbox | None = None
+        self.auto_forward_targets_text: tk.Text | None = None
 
         self._build_ui()
         assert self.auto_post_content is not None
         assert self.image_listbox is not None
+        assert self.auto_forward_targets_text is not None
         self.auto_post_content.insert("1.0", settings.auto_post_content)
         for image_path in settings.auto_post_images:
             self.image_listbox.insert(tk.END, image_path)
+        if settings.auto_forward_target_uins:
+            self.auto_forward_targets_text.insert("1.0", "\n".join(settings.auto_forward_target_uins))
         self._refresh_image_summary()
 
         self.root.after(150, self._poll_output_queue)
@@ -81,7 +91,7 @@ class MZControlPanel:
         ttk.Label(header, text="MZ 总控面板", font=("Microsoft YaHei UI", 18, "bold")).pack(anchor="w")
         ttk.Label(
             header,
-            text="统一设置触发轮数、自动说说内容/配图、每大轮休眠，并可直接启动主流程。",
+            text="统一设置触发轮数、自动说说内容/配图/自动转发规则、每大轮休眠，并可直接启动主流程。",
         ).pack(anchor="w", pady=(6, 0))
 
         env_frame = ttk.LabelFrame(container, text="运行环境", padding=12)
@@ -140,6 +150,7 @@ class MZControlPanel:
         right = ttk.Frame(main_frame)
         right.grid(row=0, column=1, sticky="nsew")
         right.rowconfigure(1, weight=1)
+        right.rowconfigure(2, weight=1)
         right.rowconfigure(3, weight=1)
         right.columnconfigure(0, weight=1)
 
@@ -158,8 +169,46 @@ class MZControlPanel:
         content_scrollbar.grid(row=0, column=1, sticky="ns")
         self.auto_post_content.configure(yscrollcommand=content_scrollbar.set)
 
+        forward_frame = ttk.LabelFrame(right, text="动态自动转发", padding=12)
+        forward_frame.grid(row=1, column=0, sticky="nsew", pady=(14, 0))
+        forward_frame.columnconfigure(1, weight=1)
+        ttk.Checkbutton(
+            forward_frame,
+            text="启用动态自动转发",
+            variable=self.auto_forward_enabled_var,
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(forward_frame, text="目标QQ号(可留空)").grid(row=1, column=0, sticky="nw", padx=(0, 10), pady=(10, 4))
+        self.auto_forward_targets_text = tk.Text(
+            forward_frame,
+            height=4,
+            wrap="word",
+            font=("Microsoft YaHei UI", 10),
+        )
+        self.auto_forward_targets_text.grid(row=1, column=1, sticky="ew", pady=(10, 4))
+        ttk.Label(forward_frame, text="一行一个 QQ 号；留空时默认扫描当前列表里的全部动态。").grid(
+            row=2,
+            column=1,
+            sticky="w",
+            pady=(0, 8),
+        )
+        ttk.Label(forward_frame, text="识别关键词").grid(row=3, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Entry(forward_frame, textvariable=self.auto_forward_keyword_var).grid(row=3, column=1, sticky="ew", pady=4)
+        ttk.Label(forward_frame, text="留空时不按关键词筛选。").grid(
+            row=4,
+            column=1,
+            sticky="w",
+            pady=(0, 8),
+        )
+        ttk.Label(forward_frame, text="附加文案").grid(row=5, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Entry(forward_frame, textvariable=self.auto_forward_append_text_var).grid(row=5, column=1, sticky="ew", pady=4)
+        ttk.Checkbutton(
+            forward_frame,
+            text="允许转发列表里本身就是转发的动态",
+            variable=self.auto_forward_include_forwarded_var,
+        ).grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
         image_frame = ttk.LabelFrame(right, text="自动说说配图", padding=12)
-        image_frame.grid(row=1, column=0, sticky="nsew", pady=(14, 0))
+        image_frame.grid(row=2, column=0, sticky="nsew", pady=(14, 0))
         image_frame.rowconfigure(0, weight=1)
         image_frame.columnconfigure(0, weight=1)
         self.image_listbox = tk.Listbox(
@@ -293,9 +342,23 @@ class MZControlPanel:
                 raise ValueError(f"{name} 不能小于 0。")
             return parsed
 
+        def parse_uins(text: str) -> list[str]:
+            result: list[str] = []
+            seen: set[str] = set()
+            for raw_line in text.replace("，", ",").splitlines():
+                for raw_item in raw_line.split(","):
+                    item = raw_item.strip()
+                    if not item or item in seen:
+                        continue
+                    seen.add(item)
+                    result.append(item)
+            return result
+
         assert self.auto_post_content is not None
         assert self.image_listbox is not None
+        assert self.auto_forward_targets_text is not None
         content = self.auto_post_content.get("1.0", "end").strip()
+        auto_forward_targets = parse_uins(self.auto_forward_targets_text.get("1.0", "end").strip())
         settings = LauncherSettings(
             auto_post_interval_big_rounds=require_non_negative_int("自动说说轮数", self.auto_post_round_var.get().strip()),
             friend_compare_interval_big_rounds=require_non_negative_int("好友对比轮数", self.friend_compare_round_var.get().strip()),
@@ -305,6 +368,11 @@ class MZControlPanel:
             auto_post_images=[str(item) for item in self.image_listbox.get(0, tk.END)],
             auto_post_wait_seconds=require_non_negative_float("说说删除等待秒数", self.auto_post_wait_var.get().strip()),
             auto_post_delete_after_post=bool(self.delete_after_post_var.get()),
+            auto_forward_enabled=bool(self.auto_forward_enabled_var.get()),
+            auto_forward_target_uins=auto_forward_targets,
+            auto_forward_keyword=self.auto_forward_keyword_var.get().strip(),
+            auto_forward_append_text=self.auto_forward_append_text_var.get().strip(),
+            auto_forward_include_forwarded_feeds=bool(self.auto_forward_include_forwarded_var.get()),
         )
         return env_values, settings
 
@@ -365,6 +433,7 @@ class MZControlPanel:
             "mz_core.ds",
             "mz_core.jc",
             "mz_core.db",
+            "mz_core.feed_forward",
             "mz_core.mz",
         ]
         reloaded = {}
