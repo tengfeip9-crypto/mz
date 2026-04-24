@@ -59,6 +59,30 @@ def 标准化QQ号列表(values: Iterable[str] | None) -> list[str]:
     return result
 
 
+def 标准化关键词列表(values: str | Iterable[str] | None) -> list[str]:
+    if values is None:
+        return []
+
+    if isinstance(values, str):
+        raw_values = [values]
+    else:
+        raw_values = list(values)
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_values:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        for item in re.split(r"[\r\n,，;；、]+", text):
+            keyword = item.strip()
+            if not keyword or keyword in seen:
+                continue
+            seen.add(keyword)
+            result.append(keyword)
+    return result
+
+
 def 从空间网址提取QQ号(url: str) -> str:
     match = re.search(r"user\.qzone\.qq\.com/(\d+)", str(url or "").strip())
     if match:
@@ -222,6 +246,7 @@ def 记录转发历史(item: dict[str, Any], append_text: str) -> None:
         "original_tid": item.get("original_tid"),
         "card_type": item.get("card_type"),
         "content_text": item.get("content_text"),
+        "matched_keyword": item.get("matched_keyword"),
         "append_text": append_text,
         "retweet_count": item.get("retweet_count"),
     }
@@ -253,8 +278,8 @@ def 筛选候选动态(
     state: dict[str, Any],
 ) -> list[dict[str, Any]]:
     normalized_watch = set(标准化QQ号列表(watch_uins))
-    normalized_keyword = str(keyword or "").strip()
-    keyword_lower = normalized_keyword.lower()
+    normalized_keywords = 标准化关键词列表(keyword)
+    keyword_pairs = [(item, item.lower()) for item in normalized_keywords]
     result: list[dict[str, Any]] = []
 
     for item in cards:
@@ -270,16 +295,24 @@ def 筛选候选动态(
             continue
         if not include_forwarded_feeds and item.get("is_forwarded_feed"):
             continue
-        if normalized_keyword and keyword_lower not in content_text.lower():
-            continue
+        matched_keyword = ""
+        if keyword_pairs:
+            content_text_lower = content_text.lower()
+            for raw_keyword, keyword_lower in keyword_pairs:
+                if keyword_lower in content_text_lower:
+                    matched_keyword = raw_keyword
+                    break
+            if not matched_keyword:
+                continue
         if 已经转发过(state, item):
             item = dict(item)
+            item["matched_keyword"] = matched_keyword or item.get("matched_keyword")
             item["already_forwarded"] = True
             result.append(item)
             continue
 
         item = dict(item)
-        item["matched_keyword"] = normalized_keyword
+        item["matched_keyword"] = matched_keyword or None
         item["already_forwarded"] = False
         result.append(item)
 
@@ -429,6 +462,7 @@ def 执行自动转发候选动态(
             "actor_uin": item.get("actor_uin"),
             "content_text": 规范化文本(item.get("content_text"))[:120],
             "card_type": item.get("card_type"),
+            "matched_keyword": item.get("matched_keyword"),
             "already_forwarded": bool(item.get("already_forwarded")),
         }
         for item in candidates[:5]
@@ -461,7 +495,7 @@ def 执行自动转发候选动态(
 def 构建参数解析器() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="按关键词自动转发指定 QQ 的列表动态。")
     parser.add_argument("--watch-qq", action="append", default=[], help="目标 QQ 号，可重复传入；留空时扫描全部动态")
-    parser.add_argument("--keyword", default="转发", help="正文必须包含的关键词；留空时不按关键词筛选")
+    parser.add_argument("--keyword", default="转发", help="正文必须包含的关键词，支持换行/逗号/顿号分隔；留空时不按关键词筛选")
     parser.add_argument("--append-text", default="测试内容", help="转发时附加的文案")
     parser.add_argument("--include-forwarded-feeds", action="store_true", help="允许转发列表里本身就是转发的动态")
     parser.add_argument("--limit", type=int, default=30, help="最多扫描多少条当前可见动态")

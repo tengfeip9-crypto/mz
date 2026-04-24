@@ -986,7 +986,7 @@ def 执行点赞(driver: webdriver.Chrome, config: AppConfig) -> LikeStats:
 
 
 def 执行自动转发(driver: webdriver.Chrome, config: AppConfig) -> dict:
-    if not config.forward.enabled or not config.forward.watch_uins:
+    if not config.forward.enabled:
         return {
             "enabled": False,
             "scanned": 0,
