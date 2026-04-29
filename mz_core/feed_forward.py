@@ -343,6 +343,19 @@ def 等待转发弹层出现(driver, timeout_seconds: float = 5.0):
     return None
 
 
+def 等待转发输入框可用(driver, timeout_seconds: float = 5.0):
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        for element in driver.find_elements(By.CSS_SELECTOR, 转发输入框选择器):
+            try:
+                if element.is_displayed() and element.is_enabled():
+                    return element
+            except Exception:
+                continue
+        time.sleep(0.2)
+    return None
+
+
 def 打开转发弹层(driver, card_id: str) -> bool:
     关闭转发弹层(driver)
 
@@ -351,7 +364,9 @@ def 打开转发弹层(driver, card_id: str) -> bool:
     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", button)
     time.sleep(0.2)
     driver.execute_script("arguments[0].click();", button)
-    return 等待转发弹层出现(driver) is not None
+    if 等待转发弹层出现(driver) is None:
+        return False
+    return 等待转发输入框可用(driver) is not None
 
 
 def 填写附加文案(driver, append_text: str) -> bool:

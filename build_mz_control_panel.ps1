@@ -19,7 +19,7 @@ $args = @(
 
 $driverPath = Join-Path $root "driver\\chromedriver.exe"
 if (Test-Path $driverPath) {
-  $args += @("--add-binary", "driver/chromedriver.exe;driver")
+  $args += @("--add-binary", "$driverPath;driver")
 } else {
   Write-Host "driver/chromedriver.exe not found, build will rely on Selenium Manager at runtime."
 }

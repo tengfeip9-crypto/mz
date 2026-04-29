@@ -1144,6 +1144,11 @@ def 自动点赞循环(
                         f"{' 已转发过' if item.get('already_forwarded') else ''}"
                     )
 
+            if forward_stats.get("enabled") and forward_stats.get("attempted", 0) > 0:
+                print("本小轮已尝试转发，暂停点赞和下滑，等待下一小轮重新扫描页面状态。")
+                time.sleep(1.0)
+                continue
+
             like_stats = 执行点赞(driver, config)
             effective_likes = like_stats.effective if config.like.verify_after_click else like_stats.clicked
 
