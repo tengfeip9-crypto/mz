@@ -25,6 +25,10 @@ class LauncherSettings:
     auto_forward_keyword: str = "转发"
     auto_forward_append_text: str = "测试内容"
     auto_forward_include_forwarded_feeds: bool = False
+    auto_forward_model_enabled: bool = False
+    auto_forward_model_endpoint: str = "http://127.0.0.1:1234/v1/chat/completions"
+    auto_forward_model_name: str = "openai/gpt-oss-20b"
+    auto_forward_model_timeout_seconds: float = 60.0
 
 
 def _coerce_int(value: Any, default: int) -> int:
@@ -95,6 +99,18 @@ def load_settings(path: Path | None = None) -> LauncherSettings:
         auto_forward_append_text=str(raw.get("auto_forward_append_text") or defaults.auto_forward_append_text),
         auto_forward_include_forwarded_feeds=bool(
             raw.get("auto_forward_include_forwarded_feeds", defaults.auto_forward_include_forwarded_feeds)
+        ),
+        auto_forward_model_enabled=bool(raw.get("auto_forward_model_enabled", defaults.auto_forward_model_enabled)),
+        auto_forward_model_endpoint=str(
+            raw.get("auto_forward_model_endpoint") or defaults.auto_forward_model_endpoint
+        ),
+        auto_forward_model_name=str(raw.get("auto_forward_model_name") or defaults.auto_forward_model_name),
+        auto_forward_model_timeout_seconds=max(
+            1.0,
+            _coerce_float(
+                raw.get("auto_forward_model_timeout_seconds"),
+                defaults.auto_forward_model_timeout_seconds,
+            ),
         ),
     )
 

@@ -107,6 +107,10 @@ class ForwardConfig:
     keyword: str = "转发"
     append_text: str = "测试内容"
     include_forwarded_feeds: bool = False
+    model_enabled: bool = False
+    model_endpoint: str = "http://127.0.0.1:1234/v1/chat/completions"
+    model_name: str = "openai/gpt-oss-20b"
+    model_timeout_seconds: float = 60.0
     scan_limit_per_small_round: int = 30
     max_new_forwards_per_small_round: int = 1
 
@@ -146,6 +150,10 @@ def 应用持久化配置(base_config: AppConfig) -> AppConfig:
     config.forward.keyword = settings.auto_forward_keyword
     config.forward.append_text = settings.auto_forward_append_text
     config.forward.include_forwarded_feeds = settings.auto_forward_include_forwarded_feeds
+    config.forward.model_enabled = settings.auto_forward_model_enabled
+    config.forward.model_endpoint = settings.auto_forward_model_endpoint
+    config.forward.model_name = settings.auto_forward_model_name
+    config.forward.model_timeout_seconds = settings.auto_forward_model_timeout_seconds
     return config
 
 
@@ -1008,6 +1016,10 @@ def 执行自动转发(driver: webdriver.Chrome, config: AppConfig) -> dict:
         keyword=config.forward.keyword,
         append_text=config.forward.append_text,
         include_forwarded_feeds=config.forward.include_forwarded_feeds,
+        model_enabled=config.forward.model_enabled,
+        model_endpoint=config.forward.model_endpoint,
+        model_name=config.forward.model_name,
+        model_timeout_seconds=config.forward.model_timeout_seconds,
         scan_limit=config.forward.scan_limit_per_small_round,
         max_forwards=config.forward.max_new_forwards_per_small_round,
         dry_run=False,
@@ -1062,13 +1074,15 @@ def 打印配置摘要(config: AppConfig) -> None:
         print(
             f"  自动转发: 已启用, 目标QQ {len(config.forward.watch_uins)} 个, "
             f"关键词“{config.forward.keyword or '不限'}”, 附加文案“{config.forward.append_text}”, "
-            f"列表转发动态{'允许' if config.forward.include_forwarded_feeds else '不转发'}"
+            f"列表转发动态{'允许' if config.forward.include_forwarded_feeds else '不转发'}, "
+            f"本地模型判断{'开启' if config.forward.model_enabled else '关闭'}"
         )
     elif config.forward.enabled:
         print(
             f"  自动转发: 已启用, 目标QQ 不限, "
             f"关键词“{config.forward.keyword or '不限'}”, 附加文案“{config.forward.append_text}”, "
-            f"列表转发动态{'允许' if config.forward.include_forwarded_feeds else '不转发'}"
+            f"列表转发动态{'允许' if config.forward.include_forwarded_feeds else '不转发'}, "
+            f"本地模型判断{'开启' if config.forward.model_enabled else '关闭'}"
         )
     else:
         print("  自动转发: 未启用")
@@ -1135,6 +1149,15 @@ def 自动点赞循环(
                     f"成功 {forward_stats.get('forwarded', 0)} / "
                     f"错误 {forward_stats.get('errors', 0)}"
                 )
+                if forward_stats.get("model_enabled"):
+                    print(
+                        "  本地模型判断："
+                        f"送入 {forward_stats.get('model_checked', 0)} / "
+                        f"选中 {forward_stats.get('model_selected', 0)} / "
+                        f"错误 {forward_stats.get('model_errors', 0)}"
+                    )
+                    if forward_stats.get("model_error"):
+                        print(f"  本地模型错误：{forward_stats.get('model_error')}")
                 for item in forward_stats.get("preview", [])[:2]:
                     print(
                         "  转发候选："
@@ -1143,6 +1166,8 @@ def 自动点赞循环(
                         f"[{item.get('card_type') or 'unknown'}]"
                         f"{' 已转发过' if item.get('already_forwarded') else ''}"
                     )
+                    if item.get("model_reason"):
+                        print(f"    模型理由：{item.get('model_reason')}")
 
             if forward_stats.get("enabled") and forward_stats.get("attempted", 0) > 0:
                 print("本小轮已尝试转发，暂停点赞和下滑，等待下一小轮重新扫描页面状态。")

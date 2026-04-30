@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 import time
 from pathlib import Path
 from typing import Any, Iterable
 
+import requests
 from selenium.webdriver.common.by import By
 
 MODULE_DIR_PATH = Path(__file__).resolve().parent
@@ -276,6 +278,7 @@ def 筛选候选动态(
     keyword: str,
     include_forwarded_feeds: bool,
     state: dict[str, Any],
+    use_keyword_filter: bool = True,
 ) -> list[dict[str, Any]]:
     normalized_watch = set(标准化QQ号列表(watch_uins))
     normalized_keywords = 标准化关键词列表(keyword)
@@ -296,7 +299,7 @@ def 筛选候选动态(
         if not include_forwarded_feeds and item.get("is_forwarded_feed"):
             continue
         matched_keyword = ""
-        if keyword_pairs:
+        if use_keyword_filter and keyword_pairs:
             content_text_lower = content_text.lower()
             for raw_keyword, keyword_lower in keyword_pairs:
                 if keyword_lower in content_text_lower:
@@ -304,6 +307,8 @@ def 筛选候选动态(
                     break
             if not matched_keyword:
                 continue
+        if not use_keyword_filter and not content_text:
+            continue
         if 已经转发过(state, item):
             item = dict(item)
             item["matched_keyword"] = matched_keyword or item.get("matched_keyword")
@@ -317,6 +322,175 @@ def 筛选候选动态(
         result.append(item)
 
     return result
+
+
+def 提取JSON内容(text: str) -> Any:
+    raw = str(text or "").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.I)
+        raw = re.sub(r"\s*```$", "", raw).strip()
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    for left, right in (("[", "]"), ("{", "}")):
+        start = raw.find(left)
+        end = raw.rfind(right)
+        if start != -1 and end > start:
+            return json.loads(raw[start : end + 1])
+
+    raise ValueError("模型返回内容不是有效 JSON")
+
+
+def 标准化模型判断结果(payload: Any) -> dict[str, dict[str, Any]]:
+    if isinstance(payload, dict):
+        if isinstance(payload.get("results"), list):
+            rows = payload["results"]
+        elif isinstance(payload.get("items"), list):
+            rows = payload["items"]
+        else:
+            rows = [payload]
+    elif isinstance(payload, list):
+        rows = payload
+    else:
+        rows = []
+
+    result: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        raw_id = row.get("id") if "id" in row else row.get("index")
+        item_id = str(raw_id if raw_id is not None else "").strip()
+        if not item_id:
+            continue
+        raw_should_forward = row.get("should_forward")
+        if isinstance(raw_should_forward, str):
+            should_forward = raw_should_forward.strip().lower() in {"true", "1", "yes", "y", "是", "转发"}
+        else:
+            should_forward = bool(raw_should_forward)
+        result[item_id] = {
+            "should_forward": should_forward,
+            "reason": str(row.get("reason") or "").strip(),
+        }
+    return result
+
+
+def 调用本地模型判断转发(
+    items: list[dict[str, Any]],
+    keyword: str,
+    endpoint: str,
+    model_name: str,
+    timeout_seconds: float,
+) -> dict[str, dict[str, Any]]:
+    if not items:
+        return {}
+
+    endpoint = str(endpoint or "").strip()
+    model_name = str(model_name or "").strip()
+    if not endpoint or not model_name:
+        raise ValueError("本地模型接口地址或模型名称为空")
+
+    prompt_items = []
+    for index, item in enumerate(items):
+        prompt_items.append(
+            {
+                "id": str(index),
+                "author": item.get("actor_name") or "",
+                "actor_uin": item.get("actor_uin") or "",
+                "card_type": item.get("card_type") or "",
+                "text": 规范化文本(item.get("content_text"))[:1000],
+            }
+        )
+
+    rule_text = 规范化文本(keyword) or "无固定关键词限制"
+    system_prompt = (
+        "你是 QQ 空间自动转发判断器。只根据动态正文判断是否应该转发。"
+        "应转发的典型情况：正文明确请求、鼓励或暗示读者转发、扩散、帮忙传播、参与转发活动，"
+        "或用户给出的规则明显命中。QQ 空间语境里，扩点、扩列、扩友、捞我扩、劳扩、互转、"
+        "求扩、帮扩、扩关系、扩同好等表达都视为希望被转发扩散。"
+        "普通日常内容、闲聊、无明确转发意图的内容不转发。"
+        "只返回 JSON 数组，不要解释，不要 Markdown。"
+    )
+    user_prompt = {
+        "用户配置的转发规则或关键词": rule_text,
+        "返回格式": [
+            {"id": "0", "should_forward": True, "reason": "简短原因"},
+            {"id": "1", "should_forward": False, "reason": "简短原因"},
+        ],
+        "待判断动态": prompt_items,
+    }
+
+    session = requests.Session()
+    session.trust_env = False
+    response = session.post(
+        endpoint,
+        headers={"Content-Type": "application/json"},
+        json={
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(user_prompt, ensure_ascii=False)},
+            ],
+            "temperature": 0,
+            "stream": False,
+        },
+        timeout=max(float(timeout_seconds), 1.0),
+    )
+    response.raise_for_status()
+    data = response.json()
+    content = ""
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if choices and isinstance(choices, list):
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        if isinstance(message, dict):
+            content = str(message.get("content") or "")
+        else:
+            content = str(choices[0].get("text") or "")
+
+    parsed = 提取JSON内容(content)
+    return 标准化模型判断结果(parsed)
+
+
+def 用本地模型筛选候选动态(
+    candidates: list[dict[str, Any]],
+    keyword: str,
+    endpoint: str,
+    model_name: str,
+    timeout_seconds: float,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    actionable = [item for item in candidates if not item.get("already_forwarded")]
+    stats = {"model_checked": len(actionable), "model_selected": 0, "model_errors": 0, "model_error": ""}
+    if not actionable:
+        return candidates, stats
+
+    try:
+        decisions = 调用本地模型判断转发(
+            actionable,
+            keyword=keyword,
+            endpoint=endpoint,
+            model_name=model_name,
+            timeout_seconds=timeout_seconds,
+        )
+    except Exception as exc:
+        stats["model_errors"] = 1
+        stats["model_error"] = str(exc)
+        return [item for item in candidates if item.get("already_forwarded")], stats
+
+    selected: list[dict[str, Any]] = [item for item in candidates if item.get("already_forwarded")]
+    for index, item in enumerate(actionable):
+        decision = decisions.get(str(index), {})
+        if not decision.get("should_forward"):
+            continue
+        selected_item = dict(item)
+        selected_item["matched_keyword"] = "本地模型"
+        selected_item["model_should_forward"] = True
+        selected_item["model_reason"] = decision.get("reason") or ""
+        selected.append(selected_item)
+
+    stats["model_selected"] = len(selected) - sum(1 for item in selected if item.get("already_forwarded"))
+    return selected, stats
 
 
 def 关闭转发弹层(driver) -> None:
@@ -438,6 +612,10 @@ def 执行自动转发候选动态(
     keyword: str,
     append_text: str,
     include_forwarded_feeds: bool = False,
+    model_enabled: bool = False,
+    model_endpoint: str = "http://127.0.0.1:1234/v1/chat/completions",
+    model_name: str = "openai/gpt-oss-20b",
+    model_timeout_seconds: float = 60.0,
     self_uin: str = "",
     scan_limit: int = 30,
     max_forwards: int = 1,
@@ -454,6 +632,11 @@ def 执行自动转发候选动态(
         "errors": 0,
         "dry_run": dry_run,
         "preview": [],
+        "model_enabled": bool(model_enabled),
+        "model_checked": 0,
+        "model_selected": 0,
+        "model_errors": 0,
+        "model_error": "",
     }
 
     current_self_uin = str(self_uin or "").strip() or str(QQ_NUMBER or "").strip() or 从空间网址提取QQ号(driver.current_url)
@@ -466,7 +649,18 @@ def 执行自动转发候选动态(
         keyword,
         include_forwarded_feeds,
         state,
+        use_keyword_filter=not bool(model_enabled),
     )
+    if model_enabled:
+        candidates, model_stats = 用本地模型筛选候选动态(
+            candidates,
+            keyword=keyword,
+            endpoint=model_endpoint,
+            model_name=model_name,
+            timeout_seconds=model_timeout_seconds,
+        )
+        stats.update(model_stats)
+        stats["errors"] += int(model_stats.get("model_errors", 0) or 0)
 
     stats["scanned"] = len(cards)
     stats["matched"] = len(candidates)
@@ -478,6 +672,7 @@ def 执行自动转发候选动态(
             "content_text": 规范化文本(item.get("content_text"))[:120],
             "card_type": item.get("card_type"),
             "matched_keyword": item.get("matched_keyword"),
+            "model_reason": item.get("model_reason"),
             "already_forwarded": bool(item.get("already_forwarded")),
         }
         for item in candidates[:5]
@@ -513,6 +708,10 @@ def 构建参数解析器() -> argparse.ArgumentParser:
     parser.add_argument("--keyword", default="转发", help="正文必须包含的关键词，支持换行/逗号/顿号分隔；留空时不按关键词筛选")
     parser.add_argument("--append-text", default="测试内容", help="转发时附加的文案")
     parser.add_argument("--include-forwarded-feeds", action="store_true", help="允许转发列表里本身就是转发的动态")
+    parser.add_argument("--use-local-model", action="store_true", help="用本地模型判断所有含文字候选动态是否转发")
+    parser.add_argument("--model-endpoint", default="http://127.0.0.1:1234/v1/chat/completions", help="本地 OpenAI 兼容接口地址")
+    parser.add_argument("--model-name", default="openai/gpt-oss-20b", help="本地模型名称")
+    parser.add_argument("--model-timeout", type=float, default=60.0, help="本地模型请求超时秒数")
     parser.add_argument("--limit", type=int, default=30, help="最多扫描多少条当前可见动态")
     parser.add_argument("--max-forwards", type=int, default=1, help="本次最多执行多少次真实转发")
     parser.add_argument("--dry-run", action="store_true", help="只扫描命中项，不真正发送")
@@ -545,6 +744,10 @@ def 主程序(argv: list[str] | None = None) -> int:
             keyword=args.keyword,
             append_text=args.append_text,
             include_forwarded_feeds=bool(args.include_forwarded_feeds),
+            model_enabled=bool(args.use_local_model),
+            model_endpoint=args.model_endpoint,
+            model_name=args.model_name,
+            model_timeout_seconds=max(args.model_timeout, 1.0),
             scan_limit=max(args.limit, 0),
             max_forwards=max(args.max_forwards, 0),
             dry_run=bool(args.dry_run),
@@ -553,6 +756,15 @@ def 主程序(argv: list[str] | None = None) -> int:
             f"自动转发扫描完成：扫描 {stats['scanned']}，命中 {stats['matched']}，"
             f"已转发 {stats['forwarded']}，已跳过 {stats['already_forwarded']}，错误 {stats['errors']}"
         )
+        if stats.get("model_enabled"):
+            print(
+                "本地模型判断："
+                f"送入 {stats.get('model_checked', 0)}，"
+                f"选中 {stats.get('model_selected', 0)}，"
+                f"错误 {stats.get('model_errors', 0)}"
+            )
+            if stats.get("model_error"):
+                print(f"本地模型错误：{stats.get('model_error')}")
         for item in stats.get("preview", []):
             print(
                 f"- {item.get('actor_name') or '(未知作者)'} "

@@ -4,11 +4,14 @@ import contextlib
 import importlib
 import os
 import queue
+import socket
 import subprocess
 import sys
 import threading
+import time
 import traceback
 import tkinter as tk
+from urllib.parse import urlparse
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -47,6 +50,8 @@ class MZControlPanel:
         self.qq_number_var = tk.StringVar(value=env_values["MZ_QQ_NUMBER"])
         self.debugger_address_var = tk.StringVar(value=env_values["MZ_DEBUGGER_ADDRESS"])
         self.chromedriver_path_var = tk.StringVar(value=env_values["MZ_CHROMEDRIVER_PATH"])
+        self.chrome_path_var = tk.StringVar(value=env_values["MZ_CHROME_PATH"])
+        self.chrome_user_data_dir_var = tk.StringVar(value=env_values["MZ_CHROME_USER_DATA_DIR"])
 
         self.auto_post_round_var = tk.StringVar(value=str(settings.auto_post_interval_big_rounds))
         self.friend_compare_round_var = tk.StringVar(value=str(settings.friend_compare_interval_big_rounds))
@@ -59,6 +64,12 @@ class MZControlPanel:
         self.auto_forward_append_text_var = tk.StringVar(value=settings.auto_forward_append_text)
         self.auto_forward_include_forwarded_var = tk.BooleanVar(
             value=settings.auto_forward_include_forwarded_feeds
+        )
+        self.auto_forward_model_enabled_var = tk.BooleanVar(value=settings.auto_forward_model_enabled)
+        self.auto_forward_model_endpoint_var = tk.StringVar(value=settings.auto_forward_model_endpoint)
+        self.auto_forward_model_name_var = tk.StringVar(value=settings.auto_forward_model_name)
+        self.auto_forward_model_timeout_var = tk.StringVar(
+            value=str(settings.auto_forward_model_timeout_seconds)
         )
         self.status_var = tk.StringVar(value="就绪")
         self.image_summary_var = tk.StringVar(value="未配置图片")
@@ -111,6 +122,13 @@ class MZControlPanel:
         ttk.Entry(env_frame, textvariable=self.chromedriver_path_var).grid(row=2, column=1, sticky="ew", pady=4)
         ttk.Button(env_frame, text="浏览", command=self._browse_driver).grid(row=2, column=2, padx=(8, 0), pady=4)
 
+        ttk.Label(env_frame, text="Chrome 程序").grid(row=3, column=0, sticky="w", padx=(0, 8), pady=4)
+        ttk.Entry(env_frame, textvariable=self.chrome_path_var).grid(row=3, column=1, sticky="ew", pady=4)
+        ttk.Button(env_frame, text="浏览", command=self._browse_chrome).grid(row=3, column=2, padx=(8, 0), pady=4)
+
+        ttk.Label(env_frame, text="调试用户目录").grid(row=4, column=0, sticky="w", padx=(0, 8), pady=4)
+        ttk.Entry(env_frame, textvariable=self.chrome_user_data_dir_var).grid(row=4, column=1, sticky="ew", pady=4)
+
         main_frame = ttk.Frame(container)
         main_frame.pack(fill="both", expand=True, pady=(14, 0))
         main_frame.columnconfigure(0, weight=2)
@@ -144,6 +162,8 @@ class MZControlPanel:
         action_frame = ttk.LabelFrame(left, text="操作", padding=12)
         action_frame.pack(fill="x", pady=(14, 0))
         ttk.Button(action_frame, text="保存配置", command=self._save_only).pack(fill="x", pady=4)
+        self.browser_button = ttk.Button(action_frame, text="打开调试浏览器", command=self._open_debug_browser)
+        self.browser_button.pack(fill="x", pady=4)
         self.start_button = ttk.Button(action_frame, text="开始运行", command=self._start_run)
         self.start_button.pack(fill="x", pady=4)
         self.stop_button = ttk.Button(action_frame, text="停止运行", command=self._stop_run, state="disabled")
@@ -322,6 +342,38 @@ class MZControlPanel:
             text="允许转发列表里本身就是转发的动态",
             variable=self.auto_forward_include_forwarded_var,
         ).grid(row=7, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Checkbutton(
+            auto_forward_page,
+            text="启用本地模型判断是否转发",
+            variable=self.auto_forward_model_enabled_var,
+        ).grid(row=8, column=0, columnspan=2, sticky="w", pady=(14, 0))
+        ttk.Label(auto_forward_page, text="模型接口地址").grid(row=9, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_model_endpoint_var).grid(
+            row=9,
+            column=1,
+            sticky="ew",
+            pady=4,
+        )
+        ttk.Label(auto_forward_page, text="模型名称").grid(row=10, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_model_name_var).grid(
+            row=10,
+            column=1,
+            sticky="ew",
+            pady=4,
+        )
+        ttk.Label(auto_forward_page, text="超时秒数").grid(row=11, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_model_timeout_var).grid(
+            row=11,
+            column=1,
+            sticky="ew",
+            pady=4,
+        )
+        ttk.Label(auto_forward_page, text="启用后会把所有含文字候选动态交给模型判断；关键词仅作为提示参考。").grid(
+            row=12,
+            column=1,
+            sticky="w",
+            pady=(0, 8),
+        )
 
         log_frame = ttk.LabelFrame(right, text="运行日志", padding=12)
         log_frame.grid(row=1, column=0, sticky="nsew", pady=(14, 0))
@@ -358,6 +410,14 @@ class MZControlPanel:
         )
         if path:
             self.chromedriver_path_var.set(path)
+
+    def _browse_chrome(self) -> None:
+        path = filedialog.askopenfilename(
+            title="选择 Chrome",
+            filetypes=[("Chrome", "chrome.exe"), ("Executable", "*.exe"), ("All Files", "*.*")],
+        )
+        if path:
+            self.chrome_path_var.set(path)
 
     def _add_images(self) -> None:
         assert self.image_listbox is not None
@@ -429,6 +489,8 @@ class MZControlPanel:
                 "MZ_QQ_NUMBER": self.qq_number_var.get().strip(),
                 "MZ_DEBUGGER_ADDRESS": self.debugger_address_var.get().strip() or "127.0.0.1:9222",
                 "MZ_CHROMEDRIVER_PATH": self.chromedriver_path_var.get().strip(),
+                "MZ_CHROME_PATH": self.chrome_path_var.get().strip(),
+                "MZ_CHROME_USER_DATA_DIR": self.chrome_user_data_dir_var.get().strip(),
             }
         )
 
@@ -450,6 +512,12 @@ class MZControlPanel:
                 raise ValueError(f"{name} 不能小于 0。")
             return parsed
 
+        def require_positive_float(name: str, value: str) -> float:
+            parsed = require_non_negative_float(name, value)
+            if parsed <= 0:
+                raise ValueError(f"{name} 必须大于 0。")
+            return parsed
+
         def parse_uins(text: str) -> list[str]:
             result: list[str] = []
             seen: set[str] = set()
@@ -467,6 +535,13 @@ class MZControlPanel:
         assert self.auto_forward_targets_text is not None
         content = self.auto_post_content.get("1.0", "end").strip()
         auto_forward_targets = parse_uins(self.auto_forward_targets_text.get("1.0", "end").strip())
+        auto_forward_model_enabled = bool(self.auto_forward_model_enabled_var.get())
+        auto_forward_model_endpoint = self.auto_forward_model_endpoint_var.get().strip()
+        auto_forward_model_name = self.auto_forward_model_name_var.get().strip()
+        if auto_forward_model_enabled and not auto_forward_model_endpoint:
+            raise ValueError("启用本地模型判断时，请填写模型接口地址。")
+        if auto_forward_model_enabled and not auto_forward_model_name:
+            raise ValueError("启用本地模型判断时，请填写模型名称。")
         settings = LauncherSettings(
             auto_post_interval_big_rounds=require_non_negative_int("自动说说轮数", self.auto_post_round_var.get().strip()),
             friend_compare_interval_big_rounds=require_non_negative_int("好友对比轮数", self.friend_compare_round_var.get().strip()),
@@ -481,8 +556,133 @@ class MZControlPanel:
             auto_forward_keyword=self.auto_forward_keyword_var.get().strip(),
             auto_forward_append_text=self.auto_forward_append_text_var.get().strip(),
             auto_forward_include_forwarded_feeds=bool(self.auto_forward_include_forwarded_var.get()),
+            auto_forward_model_enabled=auto_forward_model_enabled,
+            auto_forward_model_endpoint=auto_forward_model_endpoint,
+            auto_forward_model_name=auto_forward_model_name,
+            auto_forward_model_timeout_seconds=require_positive_float(
+                "本地模型超时秒数",
+                self.auto_forward_model_timeout_var.get().strip(),
+            ),
         )
         return env_values, settings
+
+    def _debugger_port_is_open(self, debugger_address: str) -> bool:
+        try:
+            host, port_text = debugger_address.rsplit(":", 1)
+            port = int(port_text)
+        except ValueError:
+            return False
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(1)
+            return sock.connect_ex((host, port)) == 0
+
+    def _wait_for_debugger_port(self, debugger_address: str, timeout_seconds: float = 20.0) -> bool:
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            if self._debugger_port_is_open(debugger_address):
+                return True
+            time.sleep(0.5)
+        return False
+
+    def _endpoint_port_is_open(self, endpoint: str) -> bool:
+        parsed = urlparse(str(endpoint or "").strip())
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(1)
+            return sock.connect_ex((host, port)) == 0
+
+    def _find_lm_studio_cli(self) -> Path | None:
+        candidates = [
+            Path.home() / ".lmstudio" / "bin" / "lms.exe",
+            Path(r"E:\LM Studio\resources\app\.webpack\lms.exe"),
+        ]
+        for path in candidates:
+            if path.is_file():
+                return path
+        return None
+
+    def _ensure_local_model_server(self, settings: LauncherSettings) -> None:
+        if not settings.auto_forward_model_enabled:
+            return
+        endpoint = settings.auto_forward_model_endpoint.strip()
+        if self._endpoint_port_is_open(endpoint):
+            self._append_log(f"本地模型接口已就绪：{endpoint}\n")
+            return
+
+        parsed = urlparse(endpoint)
+        host = parsed.hostname or ""
+        port = parsed.port or 0
+        if host not in {"127.0.0.1", "localhost"} or port != 1234:
+            raise RuntimeError(f"本地模型接口未就绪：{endpoint}")
+
+        lms_cli = self._find_lm_studio_cli()
+        if lms_cli is None:
+            raise RuntimeError("未找到 LM Studio CLI，请先在 LM Studio 里启动本地服务器。")
+
+        self._append_log("本地模型接口未就绪，正在尝试启动 LM Studio Server...\n")
+        result = subprocess.run(
+            [str(lms_cli), "server", "start"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
+        output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
+        if output:
+            self._append_log(output + "\n")
+        if result.returncode != 0:
+            raise RuntimeError("LM Studio Server 启动失败，请在 LM Studio 界面手动开启 Local Server。")
+
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if self._endpoint_port_is_open(endpoint):
+                self._append_log(f"本地模型接口已启动：{endpoint}\n")
+                return
+            time.sleep(0.5)
+        raise RuntimeError(f"LM Studio Server 已尝试启动，但接口仍未响应：{endpoint}")
+
+    def _launch_debug_chrome(self, env_values: dict[str, str]) -> None:
+        debugger_address = env_values.get("MZ_DEBUGGER_ADDRESS", "").strip() or "127.0.0.1:9222"
+        if self._debugger_port_is_open(debugger_address):
+            self._append_log(f"调试浏览器已在 {debugger_address} 运行，直接连接。\n")
+            return
+
+        chrome_path = env_values.get("MZ_CHROME_PATH", "").strip()
+        if not chrome_path or not Path(chrome_path).is_file():
+            raise RuntimeError("Chrome 程序路径无效，请在运行环境里填写 chrome.exe 路径。")
+
+        user_data_dir = env_values.get("MZ_CHROME_USER_DATA_DIR", "").strip() or r"C:\ChromeDebug"
+        Path(user_data_dir).mkdir(parents=True, exist_ok=True)
+
+        try:
+            _host, port_text = debugger_address.rsplit(":", 1)
+            int(port_text)
+        except ValueError as exc:
+            raise RuntimeError("调试地址格式应类似 127.0.0.1:9222。") from exc
+
+        self._append_log(
+            "正在启动调试浏览器："
+            f"{chrome_path} --remote-debugging-port={port_text} --user-data-dir=\"{user_data_dir}\"\n"
+        )
+        subprocess.Popen(
+            [
+                chrome_path,
+                f"--remote-debugging-port={port_text}",
+                f"--user-data-dir={user_data_dir}",
+                "--window-size=1280,900",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "https://qzone.qq.com/",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if not self._wait_for_debugger_port(debugger_address):
+            raise RuntimeError(f"Chrome 调试端口 {debugger_address} 未启动成功。")
+        self._append_log(f"调试浏览器已启动：{debugger_address}\n")
 
     def _save_only(self) -> None:
         try:
@@ -496,7 +696,23 @@ class MZControlPanel:
         self.status_var.set("配置已保存")
         self._append_log("配置已保存到 exe 同目录。\n")
 
+    def _open_debug_browser(self) -> None:
+        try:
+            env_values, settings = self._collect_settings()
+            save_env_settings(env_values)
+            save_settings(settings)
+            self._launch_debug_chrome(env_values)
+        except ValueError as exc:
+            messagebox.showerror("无法打开调试浏览器", str(exc), parent=self.root)
+            return
+        except RuntimeError as exc:
+            messagebox.showerror("无法打开调试浏览器", str(exc), parent=self.root)
+            return
+
+        self.status_var.set("调试浏览器已就绪")
+
     def _set_running_state(self, running: bool) -> None:
+        self.browser_button.config(state="disabled" if running else "normal")
         self.start_button.config(state="disabled" if running else "normal")
         self.stop_button.config(state="normal" if running else "disabled")
         self.status_var.set("运行中" if running else "就绪")
@@ -520,6 +736,20 @@ class MZControlPanel:
 
         save_env_settings(env_values)
         save_settings(settings)
+        try:
+            self._ensure_local_model_server(settings)
+        except RuntimeError as exc:
+            messagebox.showerror("无法启动", str(exc), parent=self.root)
+            return
+
+        debugger_address = env_values.get("MZ_DEBUGGER_ADDRESS", "").strip() or "127.0.0.1:9222"
+        if not self._debugger_port_is_open(debugger_address):
+            messagebox.showerror(
+                "无法启动",
+                f"调试浏览器未就绪，请先点击“打开调试浏览器”。\n调试地址：{debugger_address}",
+                parent=self.root,
+            )
+            return
 
         self.stop_event = threading.Event()
         self._set_running_state(True)
