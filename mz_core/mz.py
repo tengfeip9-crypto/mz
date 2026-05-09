@@ -113,6 +113,9 @@ class ForwardConfig:
     model_timeout_seconds: float = 60.0
     scan_limit_per_small_round: int = 30
     max_new_forwards_per_small_round: int = 1
+    consecutive_forward_failures: int = 0
+    stop_forwarding_after_failures: int = 2
+    forwarding_stopped_after_failures: bool = False
 
 
 @dataclass
@@ -1003,6 +1006,20 @@ def 执行自动转发(driver: webdriver.Chrome, config: AppConfig) -> dict:
             "attempted": 0,
             "forwarded": 0,
             "errors": 0,
+            "consecutive_forward_failures": 0,
+            "forwarding_stopped_after_failures": False,
+        }
+    if config.forward.forwarding_stopped_after_failures:
+        return {
+            "enabled": True,
+            "scanned": 0,
+            "matched": 0,
+            "already_forwarded": 0,
+            "attempted": 0,
+            "forwarded": 0,
+            "errors": 0,
+            "consecutive_forward_failures": config.forward.consecutive_forward_failures,
+            "forwarding_stopped_after_failures": True,
         }
 
     try:
@@ -1010,7 +1027,7 @@ def 执行自动转发(driver: webdriver.Chrome, config: AppConfig) -> dict:
     except ModuleNotFoundError:
         from feed_forward import 执行自动转发候选动态
 
-    return 执行自动转发候选动态(
+    stats = 执行自动转发候选动态(
         driver=driver,
         watch_uins=config.forward.watch_uins,
         keyword=config.forward.keyword,
@@ -1024,6 +1041,20 @@ def 执行自动转发(driver: webdriver.Chrome, config: AppConfig) -> dict:
         max_forwards=config.forward.max_new_forwards_per_small_round,
         dry_run=False,
     )
+    stats.setdefault("forwarding_stopped_after_failures", False)
+    if stats.get("attempted", 0) > 0:
+        if stats.get("forwarded", 0) > 0:
+            config.forward.consecutive_forward_failures = 0
+        elif stats.get("errors", 0) > 0:
+            config.forward.consecutive_forward_failures += 1
+    stats["consecutive_forward_failures"] = config.forward.consecutive_forward_failures
+    if (
+        stats.get("forwarding_stopped_after_failures")
+        or config.forward.consecutive_forward_failures >= config.forward.stop_forwarding_after_failures
+    ):
+        config.forward.forwarding_stopped_after_failures = True
+        stats["forwarding_stopped_after_failures"] = True
+    return stats
 
 
 def 处理定时任务(driver: webdriver.Chrome, big_round_count: int, config: AppConfig) -> None:
@@ -1158,6 +1189,14 @@ def 自动点赞循环(
                     )
                     if forward_stats.get("model_error"):
                         print(f"  本地模型错误：{forward_stats.get('model_error')}")
+                if forward_stats.get("consecutive_forward_failures"):
+                    print(
+                        "  连续转发失败："
+                        f"{forward_stats.get('consecutive_forward_failures', 0)} / "
+                        f"{config.forward.stop_forwarding_after_failures}"
+                    )
+                if forward_stats.get("forwarding_stopped_after_failures"):
+                    print("  已连续两次转发失败，本次运行停止自动转发，继续执行点赞和下滑。")
                 for item in forward_stats.get("preview", [])[:2]:
                     print(
                         "  转发候选："
@@ -1169,7 +1208,11 @@ def 自动点赞循环(
                     if item.get("model_reason"):
                         print(f"    模型理由：{item.get('model_reason')}")
 
-            if forward_stats.get("enabled") and forward_stats.get("attempted", 0) > 0:
+            if (
+                forward_stats.get("enabled")
+                and forward_stats.get("attempted", 0) > 0
+                and not forward_stats.get("forwarding_stopped_after_failures")
+            ):
                 print("本小轮已尝试转发，暂停点赞和下滑，等待下一小轮重新扫描页面状态。")
                 time.sleep(1.0)
                 continue

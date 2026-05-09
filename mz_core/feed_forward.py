@@ -37,6 +37,7 @@ except ModuleNotFoundError:
 自动转发目录 = RUN_LOG_DIR / "auto_forward"
 转发状态路径 = 自动转发目录 / "forward_state.json"
 转发日志目录 = 自动转发目录 / "history"
+转发文案汇总路径 = 自动转发目录 / "forward_append_text_log.txt"
 
 
 def 规范化文本(value: Any) -> str:
@@ -256,6 +257,20 @@ def 记录转发历史(item: dict[str, Any], append_text: str) -> None:
     save_json(record, str(log_path))
 
 
+def 记录转发文案(append_text: str, item: dict[str, Any]) -> None:
+    自动转发目录.mkdir(parents=True, exist_ok=True)
+    actor_name = str(item.get("actor_name") or "").strip() or "(未知作者)"
+    actor_uin = str(item.get("actor_uin") or "").strip() or "-"
+    content_text = 规范化文本(item.get("content_text")) or "(空)"
+    line = (
+        f"[{now_iso()}] actor={actor_name} ({actor_uin}) | "
+        f"append_text={str(append_text or '').strip() or '(空)'} | "
+        f"content={content_text}\n"
+    )
+    with 转发文案汇总路径.open("a", encoding="utf-8") as fh:
+        fh.write(line)
+
+
 def 写入转发状态(state: dict[str, Any], item: dict[str, Any], append_text: str) -> None:
     forwarded = state.get("forwarded")
     if not isinstance(forwarded, dict):
@@ -270,6 +285,7 @@ def 写入转发状态(state: dict[str, Any], item: dict[str, Any], append_text:
     }
     保存转发状态(state)
     记录转发历史(item, append_text)
+    记录转发文案(append_text, item)
 
 
 def 筛选候选动态(
@@ -637,6 +653,8 @@ def 执行自动转发候选动态(
         "model_selected": 0,
         "model_errors": 0,
         "model_error": "",
+        "consecutive_forward_failures": 0,
+        "forwarding_stopped_after_failures": False,
     }
 
     current_self_uin = str(self_uin or "").strip() or str(QQ_NUMBER or "").strip() or 从空间网址提取QQ号(driver.current_url)
@@ -682,6 +700,7 @@ def 执行自动转发候选动态(
     if dry_run:
         return stats
 
+    consecutive_forward_failures = 0
     for item in actionable[: max(max_forwards, 0)]:
         stats["attempted"] += 1
         try:
@@ -693,10 +712,17 @@ def 执行自动转发候选动态(
                 raise RuntimeError("点击发送后弹层未正常关闭")
             写入转发状态(state, item, append_text)
             stats["forwarded"] += 1
+            consecutive_forward_failures = 0
+            stats["consecutive_forward_failures"] = 0
             time.sleep(1.0)
         except Exception:
             stats["errors"] += 1
+            consecutive_forward_failures += 1
+            stats["consecutive_forward_failures"] = consecutive_forward_failures
             关闭转发弹层(driver)
+            if consecutive_forward_failures >= 2:
+                stats["forwarding_stopped_after_failures"] = True
+                break
             continue
 
     return stats
