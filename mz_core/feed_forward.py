@@ -262,13 +262,25 @@ def 记录转发文案(append_text: str, item: dict[str, Any]) -> None:
     actor_name = str(item.get("actor_name") or "").strip() or "(未知作者)"
     actor_uin = str(item.get("actor_uin") or "").strip() or "-"
     content_text = 规范化文本(item.get("content_text")) or "(空)"
-    line = (
-        f"[{now_iso()}] actor={actor_name} ({actor_uin}) | "
-        f"append_text={str(append_text or '').strip() or '(空)'} | "
-        f"content={content_text}\n"
+    text = str(append_text or "").strip() or "(空)"
+    record = (
+        "===== 转发样本开始 =====\n"
+        f"记录时间：{now_iso()}\n"
+        f"作者：{actor_name}\n"
+        f"作者QQ：{actor_uin}\n"
+        f"动态内容：{content_text}\n"
+        f"转发文案：{text}\n"
+        "\n"
+        "人工判断（请手动填写）：\n"
+        "是否应该转发：\n"
+        "误转发 / 正确转发：\n"
+        "原因：\n"
+        "可训练摘要：\n"
+        "\n"
+        "===== 转发样本结束 =====\n\n"
     )
     with 转发文案汇总路径.open("a", encoding="utf-8") as fh:
-        fh.write(line)
+        fh.write(record)
 
 
 def 写入转发状态(state: dict[str, Any], item: dict[str, Any], append_text: str) -> None:
