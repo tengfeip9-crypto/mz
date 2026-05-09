@@ -103,7 +103,6 @@ class LikeConfig:
 @dataclass
 class ForwardConfig:
     enabled: bool = False
-    watch_uins: list[str] = field(default_factory=list)
     keyword: str = "转发"
     append_text: str = "测试内容"
     include_forwarded_feeds: bool = False
@@ -149,7 +148,6 @@ def 应用持久化配置(base_config: AppConfig) -> AppConfig:
     config.tasks.friend_save_interval_big_rounds = settings.friend_save_interval_big_rounds
     config.loop.wait_between_big_rounds_seconds = settings.wait_between_big_rounds_seconds
     config.forward.enabled = settings.auto_forward_enabled
-    config.forward.watch_uins = list(settings.auto_forward_target_uins)
     config.forward.keyword = settings.auto_forward_keyword
     config.forward.append_text = settings.auto_forward_append_text
     config.forward.include_forwarded_feeds = settings.auto_forward_include_forwarded_feeds
@@ -1029,7 +1027,6 @@ def 执行自动转发(driver: webdriver.Chrome, config: AppConfig) -> dict:
 
     stats = 执行自动转发候选动态(
         driver=driver,
-        watch_uins=config.forward.watch_uins,
         keyword=config.forward.keyword,
         append_text=config.forward.append_text,
         include_forwarded_feeds=config.forward.include_forwarded_feeds,
@@ -1101,20 +1098,15 @@ def 打印配置摘要(config: AppConfig) -> None:
         f"好友保存/{config.tasks.friend_save_interval_big_rounds}, "
         f"好友对比/{config.tasks.friend_compare_interval_big_rounds}"
     )
-    if config.forward.enabled and config.forward.watch_uins:
+    if config.forward.enabled:
         print(
-            f"  自动转发: 已启用, 目标QQ {len(config.forward.watch_uins)} 个, "
-            f"关键词“{config.forward.keyword or '不限'}”, 附加文案“{config.forward.append_text}”, "
+            f"  自动转发: 已启用, "
+            f"屏蔽关键词“{config.forward.keyword or '无'}”, 附加文案“{config.forward.append_text}”, "
             f"列表转发动态{'允许' if config.forward.include_forwarded_feeds else '不转发'}, "
             f"本地模型判断{'开启' if config.forward.model_enabled else '关闭'}"
         )
-    elif config.forward.enabled:
-        print(
-            f"  自动转发: 已启用, 目标QQ 不限, "
-            f"关键词“{config.forward.keyword or '不限'}”, 附加文案“{config.forward.append_text}”, "
-            f"列表转发动态{'允许' if config.forward.include_forwarded_feeds else '不转发'}, "
-            f"本地模型判断{'开启' if config.forward.model_enabled else '关闭'}"
-        )
+        if not config.forward.model_enabled:
+            print("  自动转发说明: 未开启本地模型时，不会新增转发。")
     else:
         print("  自动转发: 未启用")
 

@@ -77,19 +77,15 @@ class MZControlPanel:
 
         self.auto_post_content: tk.Text | None = None
         self.image_listbox: tk.Listbox | None = None
-        self.auto_forward_targets_text: tk.Text | None = None
         self.detail_pages: dict[str, ttk.Frame] = {}
         self.detail_back_button: ttk.Button | None = None
 
         self._build_ui()
         assert self.auto_post_content is not None
         assert self.image_listbox is not None
-        assert self.auto_forward_targets_text is not None
         self.auto_post_content.insert("1.0", settings.auto_post_content)
         for image_path in settings.auto_post_images:
             self.image_listbox.insert(tk.END, image_path)
-        if settings.auto_forward_target_uins:
-            self.auto_forward_targets_text.insert("1.0", "\n".join(settings.auto_forward_target_uins))
         self._refresh_image_summary()
 
         self.root.after(150, self._poll_output_queue)
@@ -236,7 +232,7 @@ class MZControlPanel:
         auto_forward_card.columnconfigure(0, weight=1)
         ttk.Label(
             auto_forward_card,
-            text="配置目标QQ、关键词、附加文案和是否允许转发列表转发动态。",
+            text="配置屏蔽关键词、附加文案和是否允许转发列表转发动态。",
             wraplength=220,
             justify="left",
         ).grid(row=0, column=0, sticky="w")
@@ -313,63 +309,49 @@ class MZControlPanel:
             text="启用动态自动转发",
             variable=self.auto_forward_enabled_var,
         ).grid(row=1, column=0, columnspan=2, sticky="w")
-        ttk.Label(auto_forward_page, text="目标QQ号(可留空)").grid(row=2, column=0, sticky="nw", padx=(0, 10), pady=(10, 4))
-        self.auto_forward_targets_text = tk.Text(
-            auto_forward_page,
-            height=5,
-            wrap="word",
-            font=("Microsoft YaHei UI", 10),
-        )
-        self.auto_forward_targets_text.grid(row=2, column=1, sticky="ew", pady=(10, 4))
-        ttk.Label(auto_forward_page, text="一行一个 QQ 号；留空时默认扫描当前列表里的全部动态。").grid(
+        ttk.Label(auto_forward_page, text="屏蔽关键词").grid(row=2, column=0, sticky="w", padx=(0, 10), pady=(10, 4))
+        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_keyword_var).grid(row=2, column=1, sticky="ew", pady=(10, 4))
+        ttk.Label(auto_forward_page, text="支持换行、逗号、顿号分隔；命中这些关键词的动态会直接跳过。").grid(
             row=3,
             column=1,
             sticky="w",
             pady=(0, 8),
         )
-        ttk.Label(auto_forward_page, text="识别关键词").grid(row=4, column=0, sticky="w", padx=(0, 10), pady=4)
-        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_keyword_var).grid(row=4, column=1, sticky="ew", pady=4)
-        ttk.Label(auto_forward_page, text="支持换行、逗号、顿号分隔；留空时不按关键词筛选。").grid(
-            row=5,
-            column=1,
-            sticky="w",
-            pady=(0, 8),
-        )
-        ttk.Label(auto_forward_page, text="附加文案").grid(row=6, column=0, sticky="w", padx=(0, 10), pady=4)
-        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_append_text_var).grid(row=6, column=1, sticky="ew", pady=4)
+        ttk.Label(auto_forward_page, text="附加文案").grid(row=4, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_append_text_var).grid(row=4, column=1, sticky="ew", pady=4)
         ttk.Checkbutton(
             auto_forward_page,
             text="允许转发列表里本身就是转发的动态",
             variable=self.auto_forward_include_forwarded_var,
-        ).grid(row=7, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
         ttk.Checkbutton(
             auto_forward_page,
             text="启用本地模型判断是否转发",
             variable=self.auto_forward_model_enabled_var,
-        ).grid(row=8, column=0, columnspan=2, sticky="w", pady=(14, 0))
-        ttk.Label(auto_forward_page, text="模型接口地址").grid(row=9, column=0, sticky="w", padx=(0, 10), pady=4)
+        ).grid(row=6, column=0, columnspan=2, sticky="w", pady=(14, 0))
+        ttk.Label(auto_forward_page, text="模型接口地址").grid(row=7, column=0, sticky="w", padx=(0, 10), pady=4)
         ttk.Entry(auto_forward_page, textvariable=self.auto_forward_model_endpoint_var).grid(
+            row=7,
+            column=1,
+            sticky="ew",
+            pady=4,
+        )
+        ttk.Label(auto_forward_page, text="模型名称").grid(row=8, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_model_name_var).grid(
+            row=8,
+            column=1,
+            sticky="ew",
+            pady=4,
+        )
+        ttk.Label(auto_forward_page, text="超时秒数").grid(row=9, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_model_timeout_var).grid(
             row=9,
             column=1,
             sticky="ew",
             pady=4,
         )
-        ttk.Label(auto_forward_page, text="模型名称").grid(row=10, column=0, sticky="w", padx=(0, 10), pady=4)
-        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_model_name_var).grid(
+        ttk.Label(auto_forward_page, text="启用后会把未命中屏蔽关键词且含文字的候选动态交给模型判断。").grid(
             row=10,
-            column=1,
-            sticky="ew",
-            pady=4,
-        )
-        ttk.Label(auto_forward_page, text="超时秒数").grid(row=11, column=0, sticky="w", padx=(0, 10), pady=4)
-        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_model_timeout_var).grid(
-            row=11,
-            column=1,
-            sticky="ew",
-            pady=4,
-        )
-        ttk.Label(auto_forward_page, text="启用后会把所有含文字候选动态交给模型判断；关键词仅作为提示参考。").grid(
-            row=12,
             column=1,
             sticky="w",
             pady=(0, 8),
@@ -518,23 +500,9 @@ class MZControlPanel:
                 raise ValueError(f"{name} 必须大于 0。")
             return parsed
 
-        def parse_uins(text: str) -> list[str]:
-            result: list[str] = []
-            seen: set[str] = set()
-            for raw_line in text.replace("，", ",").splitlines():
-                for raw_item in raw_line.split(","):
-                    item = raw_item.strip()
-                    if not item or item in seen:
-                        continue
-                    seen.add(item)
-                    result.append(item)
-            return result
-
         assert self.auto_post_content is not None
         assert self.image_listbox is not None
-        assert self.auto_forward_targets_text is not None
         content = self.auto_post_content.get("1.0", "end").strip()
-        auto_forward_targets = parse_uins(self.auto_forward_targets_text.get("1.0", "end").strip())
         auto_forward_model_enabled = bool(self.auto_forward_model_enabled_var.get())
         auto_forward_model_endpoint = self.auto_forward_model_endpoint_var.get().strip()
         auto_forward_model_name = self.auto_forward_model_name_var.get().strip()
@@ -552,7 +520,6 @@ class MZControlPanel:
             auto_post_wait_seconds=require_non_negative_float("说说删除等待秒数", self.auto_post_wait_var.get().strip()),
             auto_post_delete_after_post=bool(self.delete_after_post_var.get()),
             auto_forward_enabled=bool(self.auto_forward_enabled_var.get()),
-            auto_forward_target_uins=auto_forward_targets,
             auto_forward_keyword=self.auto_forward_keyword_var.get().strip(),
             auto_forward_append_text=self.auto_forward_append_text_var.get().strip(),
             auto_forward_include_forwarded_feeds=bool(self.auto_forward_include_forwarded_var.get()),

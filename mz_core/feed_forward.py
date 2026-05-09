@@ -44,24 +44,6 @@ def 规范化文本(value: Any) -> str:
     return " ".join(str(value or "").split()).strip()
 
 
-def 标准化QQ号列表(values: Iterable[str] | None) -> list[str]:
-    if not values:
-        return []
-    result: list[str] = []
-    seen: set[str] = set()
-    for raw in values:
-        text = str(raw or "").strip()
-        if not text:
-            continue
-        for item in re.split(r"[\s,，;；]+", text):
-            qq = item.strip()
-            if not qq or qq in seen:
-                continue
-            seen.add(qq)
-            result.append(qq)
-    return result
-
-
 def 标准化关键词列表(values: str | Iterable[str] | None) -> list[str]:
     if values is None:
         return []
@@ -84,6 +66,16 @@ def 标准化关键词列表(values: str | Iterable[str] | None) -> list[str]:
             seen.add(keyword)
             result.append(keyword)
     return result
+
+
+def 匹配关键词(content_text: str, keyword_pairs: list[tuple[str, str]]) -> str:
+    content_text_lower = 规范化文本(content_text).lower()
+    if not content_text_lower:
+        return ""
+    for raw_keyword, keyword_lower in keyword_pairs:
+        if keyword_lower in content_text_lower:
+            return raw_keyword
+    return ""
 
 
 def 从空间网址提取QQ号(url: str) -> str:
@@ -302,13 +294,11 @@ def 写入转发状态(state: dict[str, Any], item: dict[str, Any], append_text:
 
 def 筛选候选动态(
     cards: list[dict[str, Any]],
-    watch_uins: Iterable[str],
     keyword: str,
     include_forwarded_feeds: bool,
     state: dict[str, Any],
-    use_keyword_filter: bool = True,
+    allow_text_candidates: bool = False,
 ) -> list[dict[str, Any]]:
-    normalized_watch = set(标准化QQ号列表(watch_uins))
     normalized_keywords = 标准化关键词列表(keyword)
     keyword_pairs = [(item, item.lower()) for item in normalized_keywords]
     result: list[dict[str, Any]] = []
@@ -322,30 +312,24 @@ def 筛选候选动态(
             continue
         if not actor_uin:
             continue
-        if normalized_watch and actor_uin not in normalized_watch:
-            continue
         if not include_forwarded_feeds and item.get("is_forwarded_feed"):
             continue
-        matched_keyword = ""
-        if use_keyword_filter and keyword_pairs:
-            content_text_lower = content_text.lower()
-            for raw_keyword, keyword_lower in keyword_pairs:
-                if keyword_lower in content_text_lower:
-                    matched_keyword = raw_keyword
-                    break
-            if not matched_keyword:
-                continue
-        if not use_keyword_filter and not content_text:
+        blocked_keyword = 匹配关键词(content_text, keyword_pairs)
+        if blocked_keyword:
+            continue
+        if allow_text_candidates and not content_text:
             continue
         if 已经转发过(state, item):
             item = dict(item)
-            item["matched_keyword"] = matched_keyword or item.get("matched_keyword")
+            item["matched_keyword"] = item.get("matched_keyword")
             item["already_forwarded"] = True
             result.append(item)
             continue
+        if not allow_text_candidates:
+            continue
 
         item = dict(item)
-        item["matched_keyword"] = matched_keyword or None
+        item["matched_keyword"] = None
         item["already_forwarded"] = False
         result.append(item)
 
@@ -435,14 +419,14 @@ def 调用本地模型判断转发(
     rule_text = 规范化文本(keyword) or "无固定关键词限制"
     system_prompt = (
         "你是 QQ 空间自动转发判断器。只根据动态正文判断是否应该转发。"
-        "应转发的典型情况：正文明确请求、鼓励或暗示读者转发、扩散、帮忙传播、参与转发活动，"
-        "或用户给出的规则明显命中。QQ 空间语境里，扩点、扩列、扩友、捞我扩、劳扩、互转、"
+        "应转发的典型情况：正文明确请求、鼓励或暗示读者转发、扩散、帮忙传播、参与转发活动。"
+        "QQ 空间语境里，扩点、扩列、扩友、捞我扩、劳扩、互转、"
         "求扩、帮扩、扩关系、扩同好等表达都视为希望被转发扩散。"
         "普通日常内容、闲聊、无明确转发意图的内容不转发。"
         "只返回 JSON 数组，不要解释，不要 Markdown。"
     )
     user_prompt = {
-        "用户配置的转发规则或关键词": rule_text,
+        "用户配置的屏蔽关键词参考": rule_text,
         "返回格式": [
             {"id": "0", "should_forward": True, "reason": "简短原因"},
             {"id": "1", "should_forward": False, "reason": "简短原因"},
@@ -636,7 +620,6 @@ def 发送转发(driver, timeout_seconds: float = 8.0) -> bool:
 
 def 执行自动转发候选动态(
     driver,
-    watch_uins: Iterable[str],
     keyword: str,
     append_text: str,
     include_forwarded_feeds: bool = False,
@@ -649,7 +632,6 @@ def 执行自动转发候选动态(
     max_forwards: int = 1,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    normalized_watch = 标准化QQ号列表(watch_uins)
     stats = {
         "enabled": True,
         "scanned": 0,
@@ -675,11 +657,10 @@ def 执行自动转发候选动态(
     state = 载入转发状态()
     candidates = 筛选候选动态(
         cards,
-        normalized_watch,
         keyword,
         include_forwarded_feeds,
         state,
-        use_keyword_filter=not bool(model_enabled),
+        allow_text_candidates=bool(model_enabled),
     )
     if model_enabled:
         candidates, model_stats = 用本地模型筛选候选动态(
@@ -741,9 +722,8 @@ def 执行自动转发候选动态(
 
 
 def 构建参数解析器() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="按关键词自动转发指定 QQ 的列表动态。")
-    parser.add_argument("--watch-qq", action="append", default=[], help="目标 QQ 号，可重复传入；留空时扫描全部动态")
-    parser.add_argument("--keyword", default="转发", help="正文必须包含的关键词，支持换行/逗号/顿号分隔；留空时不按关键词筛选")
+    parser = argparse.ArgumentParser(description="按关键词自动转发当前列表中的动态。")
+    parser.add_argument("--keyword", default="转发", help="屏蔽关键词，支持换行/逗号/顿号分隔；命中这些关键词时直接不转发")
     parser.add_argument("--append-text", default="测试内容", help="转发时附加的文案")
     parser.add_argument("--include-forwarded-feeds", action="store_true", help="允许转发列表里本身就是转发的动态")
     parser.add_argument("--use-local-model", action="store_true", help="用本地模型判断所有含文字候选动态是否转发")
@@ -778,7 +758,6 @@ def 主程序(argv: list[str] | None = None) -> int:
         尝试恢复点赞流(driver, config, require_praise=False)
         stats = 执行自动转发候选动态(
             driver=driver,
-            watch_uins=args.watch_qq,
             keyword=args.keyword,
             append_text=args.append_text,
             include_forwarded_feeds=bool(args.include_forwarded_feeds),
