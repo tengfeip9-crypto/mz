@@ -11,8 +11,8 @@ DEFAULT_ENV = {
     "MZ_QQ_NUMBER": "",
     "MZ_DEBUGGER_ADDRESS": "127.0.0.1:9222",
     "MZ_CHROMEDRIVER_PATH": "",
-    "MZ_CHROME_PATH": "",
-    "MZ_CHROME_USER_DATA_DIR": "",
+    "MZ_CHROME_PATH": r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    "MZ_CHROME_USER_DATA_DIR": r"C:\ChromeDebug",
     "MZ_FRIEND_DATA_DIR": "",
     "MZ_RUN_LOG_DIR": "",
     "MZ_REMOTE_LOGIN_DATA_DIR": "",
@@ -37,6 +37,10 @@ def load_env_settings(path: Path | None = None) -> dict[str, str]:
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
             value = value[1:-1]
         data[key] = value
+    if not data["MZ_CHROME_PATH"]:
+        data["MZ_CHROME_PATH"] = DEFAULT_ENV["MZ_CHROME_PATH"]
+    if not data["MZ_CHROME_USER_DATA_DIR"]:
+        data["MZ_CHROME_USER_DATA_DIR"] = DEFAULT_ENV["MZ_CHROME_USER_DATA_DIR"]
     return data
 
 

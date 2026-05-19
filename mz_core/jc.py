@@ -3,20 +3,20 @@ from pathlib import Path
 
 import requests
 from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 
 MODULE_DIR_PATH = Path(__file__).resolve().parent
 PROJECT_ROOT_PATH = MODULE_DIR_PATH.parent
 if str(PROJECT_ROOT_PATH) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT_PATH))
 
+from chrome_driver_utils import create_attached_chrome_driver  # noqa: E402
 from project_config import require_qq_number  # noqa: E402
 
 try:
     from mz_core.friend_storage import (
         CHROME_DRIVER_PATH,
         DEBUGGER_ADDRESS,
+        FRIEND_DATA_DIR,
         LATEST_SNAPSHOT_PATH,
         build_friend_record,
         ensure_friend_dirs,
@@ -29,10 +29,12 @@ try:
         snapshot_friend_count,
         write_snapshot,
     )
+    from mz_core.runtime_cleanup import prune_friend_data_history
 except ModuleNotFoundError:
     from friend_storage import (
         CHROME_DRIVER_PATH,
         DEBUGGER_ADDRESS,
+        FRIEND_DATA_DIR,
         LATEST_SNAPSHOT_PATH,
         build_friend_record,
         ensure_friend_dirs,
@@ -45,13 +47,12 @@ except ModuleNotFoundError:
         snapshot_friend_count,
         write_snapshot,
     )
+    from runtime_cleanup import prune_friend_data_history
 
 # ================= 工具函数 =================
 
 def 连接浏览器():
-    chrome_options = Options()
-    chrome_options.add_experimental_option("debuggerAddress", DEBUGGER_ADDRESS)
-    return webdriver.Chrome(service=Service(CHROME_DRIVER_PATH), options=chrome_options)
+    return create_attached_chrome_driver(DEBUGGER_ADDRESS, CHROME_DRIVER_PATH)
 
 
 def 获取_g_tk(cookie字典):
@@ -147,11 +148,14 @@ def 保存好友快照(friends):
     snapshot_path = write_snapshot(snapshot, timestamp)
     export_csv_path = export_friends_csv(friends, timestamp)
     export_xlsx_path = export_friends_xlsx(friends, timestamp)
+    cleanup_stats = prune_friend_data_history(Path(FRIEND_DATA_DIR))
 
     print(f"好友数量: {snapshot['friend_count']}")
     print(f"好友快照已保存: {snapshot_path}")
     print(f"好友导出已保存: {export_csv_path}")
     print(f"好友Excel已保存: {export_xlsx_path}")
+    if cleanup_stats.files_deleted:
+        print(f"历史裁剪完成: {cleanup_stats.summary_text()}")
 
     return snapshot_path, export_csv_path, export_xlsx_path
 

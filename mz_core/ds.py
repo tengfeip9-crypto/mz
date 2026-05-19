@@ -14,14 +14,13 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 import requests
 from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 
 MODULE_DIR_PATH = Path(__file__).resolve().parent
 PROJECT_ROOT_PATH = MODULE_DIR_PATH.parent
 if str(PROJECT_ROOT_PATH) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT_PATH))
 
+from chrome_driver_utils import create_attached_chrome_driver  # noqa: E402
 from project_config import (  # noqa: E402
     CHROMEDRIVER_PATH as DEFAULT_CHROMEDRIVER_PATH,
     DEBUGGER_ADDRESS,
@@ -98,10 +97,7 @@ class 已上传图片:
 
 
 def 连接浏览器():
-    chrome_options = Options()
-    chrome_options.add_experimental_option("debuggerAddress", DEBUGGER_ADDRESS)
-    service = Service(CHROME_DRIVER_PATH)
-    return webdriver.Chrome(service=service, options=chrome_options)
+    return create_attached_chrome_driver(DEBUGGER_ADDRESS, CHROME_DRIVER_PATH)
 
 
 def 获取cookie字典(driver):

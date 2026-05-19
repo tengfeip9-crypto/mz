@@ -21,10 +21,17 @@ class LauncherSettings:
     auto_post_wait_seconds: float = 60.0
     auto_post_delete_after_post: bool = True
     auto_forward_enabled: bool = False
-    auto_forward_target_uins: list[str] = field(default_factory=list)
     auto_forward_keyword: str = "转发"
     auto_forward_append_text: str = "测试内容"
     auto_forward_include_forwarded_feeds: bool = False
+    auto_forward_only_remark_suffix_emoji: bool = False
+    auto_forward_model_enabled: bool = False
+    auto_forward_model_endpoint: str = "http://127.0.0.1:1234/v1/chat/completions"
+    auto_forward_model_name: str = "openai/gpt-oss-20b"
+    auto_forward_model_timeout_seconds: float = 60.0
+    auto_forward_reason_model_endpoint: str = "http://127.0.0.1:1234/v1/chat/completions"
+    auto_forward_reason_model_name: str = "openai/gpt-oss-20b"
+    auto_forward_reason_model_timeout_seconds: float = 60.0
 
 
 def _coerce_int(value: Any, default: int) -> int:
@@ -52,20 +59,6 @@ def _normalize_images(value: Any) -> list[str]:
     return result
 
 
-def _normalize_uins(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    result: list[str] = []
-    seen: set[str] = set()
-    for item in value:
-        text = str(item or "").strip()
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        result.append(text)
-    return result
-
-
 def load_settings(path: Path | None = None) -> LauncherSettings:
     settings_path = path or SETTINGS_PATH
     defaults = LauncherSettings()
@@ -90,11 +83,38 @@ def load_settings(path: Path | None = None) -> LauncherSettings:
         auto_post_wait_seconds=max(0.0, _coerce_float(raw.get("auto_post_wait_seconds"), defaults.auto_post_wait_seconds)),
         auto_post_delete_after_post=bool(raw.get("auto_post_delete_after_post", defaults.auto_post_delete_after_post)),
         auto_forward_enabled=bool(raw.get("auto_forward_enabled", defaults.auto_forward_enabled)),
-        auto_forward_target_uins=_normalize_uins(raw.get("auto_forward_target_uins")),
         auto_forward_keyword=str(raw.get("auto_forward_keyword") or defaults.auto_forward_keyword),
         auto_forward_append_text=str(raw.get("auto_forward_append_text") or defaults.auto_forward_append_text),
         auto_forward_include_forwarded_feeds=bool(
             raw.get("auto_forward_include_forwarded_feeds", defaults.auto_forward_include_forwarded_feeds)
+        ),
+        auto_forward_only_remark_suffix_emoji=bool(
+            raw.get("auto_forward_only_remark_suffix_emoji", defaults.auto_forward_only_remark_suffix_emoji)
+        ),
+        auto_forward_model_enabled=bool(raw.get("auto_forward_model_enabled", defaults.auto_forward_model_enabled)),
+        auto_forward_model_endpoint=str(
+            raw.get("auto_forward_model_endpoint") or defaults.auto_forward_model_endpoint
+        ),
+        auto_forward_model_name=str(raw.get("auto_forward_model_name") or defaults.auto_forward_model_name),
+        auto_forward_model_timeout_seconds=max(
+            1.0,
+            _coerce_float(
+                raw.get("auto_forward_model_timeout_seconds"),
+                defaults.auto_forward_model_timeout_seconds,
+            ),
+        ),
+        auto_forward_reason_model_endpoint=str(
+            raw.get("auto_forward_reason_model_endpoint") or defaults.auto_forward_reason_model_endpoint
+        ),
+        auto_forward_reason_model_name=str(
+            raw.get("auto_forward_reason_model_name") or defaults.auto_forward_reason_model_name
+        ),
+        auto_forward_reason_model_timeout_seconds=max(
+            1.0,
+            _coerce_float(
+                raw.get("auto_forward_reason_model_timeout_seconds"),
+                defaults.auto_forward_reason_model_timeout_seconds,
+            ),
         ),
     )
 

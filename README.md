@@ -68,7 +68,7 @@ portable_app/
 
 - `MZ_QQ_NUMBER`：当前账号 QQ 号，好友抓取与说说发布都会用到
 - `MZ_DEBUGGER_ADDRESS`：Chrome 远程调试地址，默认 `127.0.0.1:9222`
-- `MZ_CHROMEDRIVER_PATH`：ChromeDriver 路径；便携版通常可以留空，直接使用内置驱动
+- `MZ_CHROMEDRIVER_PATH`：ChromeDriver 路径；留空时会交给 Selenium Manager 自动匹配，若填写了旧版本驱动，程序也会在检测到主版本不一致后自动回退
 - `MZ_CHROME_PATH`：Chrome 可执行文件路径
 - `MZ_CHROME_USER_DATA_DIR`：远程调试模式使用的 Chrome 用户数据目录
 - `MZ_FRIEND_DATA_DIR`：好友快照与导出文件目录

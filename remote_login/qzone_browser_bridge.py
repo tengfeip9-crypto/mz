@@ -11,8 +11,6 @@ from pathlib import Path
 
 from selenium import webdriver
 from selenium.common.exceptions import NoSuchElementException
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 
 MODULE_DIR_PATH = Path(__file__).resolve().parent
@@ -20,6 +18,7 @@ PROJECT_ROOT_PATH = MODULE_DIR_PATH.parent
 if str(PROJECT_ROOT_PATH) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT_PATH))
 
+from chrome_driver_utils import create_attached_chrome_driver  # noqa: E402
 from project_config import (  # noqa: E402
     CHROME_PATH as DEFAULT_CHROME_PATH,
     CHROME_USER_DATA_DIR,
@@ -99,9 +98,10 @@ class QzoneBrowserBridge:
             if not self._wait_for_port():
                 raise RuntimeError(f"Chrome 调试端口 {self.debugger_address} 未启动成功。")
 
-        options = Options()
-        options.add_experimental_option("debuggerAddress", self.debugger_address)
-        self.driver = webdriver.Chrome(service=Service(self.chromedriver_path), options=options)
+        self.driver = create_attached_chrome_driver(
+            self.debugger_address,
+            self.chromedriver_path,
+        )
         self._ensure_target_page()
         return self.driver
 

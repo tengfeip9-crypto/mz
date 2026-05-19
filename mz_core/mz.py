@@ -14,8 +14,6 @@ from typing import Iterable, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 
 MODULE_DIR_PATH = Path(__file__).resolve().parent
@@ -23,6 +21,7 @@ PROJECT_ROOT_PATH = MODULE_DIR_PATH.parent
 if str(PROJECT_ROOT_PATH) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT_PATH))
 
+from chrome_driver_utils import create_attached_chrome_driver, explain_driver_compatibility  # noqa: E402
 from project_config import CHROMEDRIVER_PATH, DEBUGGER_ADDRESS  # noqa: E402
 from mz_user_settings import load_settings  # noqa: E402
 
@@ -103,12 +102,22 @@ class LikeConfig:
 @dataclass
 class ForwardConfig:
     enabled: bool = False
-    watch_uins: list[str] = field(default_factory=list)
     keyword: str = "转发"
     append_text: str = "测试内容"
     include_forwarded_feeds: bool = False
+    only_remark_suffix_emoji: bool = False
+    model_enabled: bool = False
+    model_endpoint: str = "http://127.0.0.1:1234/v1/chat/completions"
+    model_name: str = "openai/gpt-oss-20b"
+    model_timeout_seconds: float = 60.0
+    reason_model_endpoint: str = "http://127.0.0.1:1234/v1/chat/completions"
+    reason_model_name: str = "openai/gpt-oss-20b"
+    reason_model_timeout_seconds: float = 60.0
     scan_limit_per_small_round: int = 30
     max_new_forwards_per_small_round: int = 1
+    consecutive_forward_failures: int = 0
+    stop_forwarding_after_failures: int = 2
+    forwarding_stopped_after_failures: bool = False
 
 
 @dataclass
@@ -142,10 +151,17 @@ def 应用持久化配置(base_config: AppConfig) -> AppConfig:
     config.tasks.friend_save_interval_big_rounds = settings.friend_save_interval_big_rounds
     config.loop.wait_between_big_rounds_seconds = settings.wait_between_big_rounds_seconds
     config.forward.enabled = settings.auto_forward_enabled
-    config.forward.watch_uins = list(settings.auto_forward_target_uins)
     config.forward.keyword = settings.auto_forward_keyword
     config.forward.append_text = settings.auto_forward_append_text
     config.forward.include_forwarded_feeds = settings.auto_forward_include_forwarded_feeds
+    config.forward.only_remark_suffix_emoji = settings.auto_forward_only_remark_suffix_emoji
+    config.forward.model_enabled = settings.auto_forward_model_enabled
+    config.forward.model_endpoint = settings.auto_forward_model_endpoint
+    config.forward.model_name = settings.auto_forward_model_name
+    config.forward.model_timeout_seconds = settings.auto_forward_model_timeout_seconds
+    config.forward.reason_model_endpoint = settings.auto_forward_reason_model_endpoint
+    config.forward.reason_model_name = settings.auto_forward_reason_model_name
+    config.forward.reason_model_timeout_seconds = settings.auto_forward_reason_model_timeout_seconds
     return config
 
 
@@ -253,16 +269,11 @@ def 监控当前异常场景(driver: webdriver.Chrome, config: AppConfig, stage:
 
 
 def 连接浏览器(browser_config: BrowserConfig) -> webdriver.Chrome:
-    chrome_options = Options()
-    chrome_options.add_experimental_option("debuggerAddress", browser_config.debugger_address)
-
-    driver_path = (browser_config.driver_path or "").strip()
-    if driver_path and os.path.exists(driver_path):
-        service = Service(driver_path)
-        return webdriver.Chrome(service=service, options=chrome_options)
-
-    # 当本地没有打包好的 chromedriver 时，交给 Selenium Manager 自动解析驱动。
-    return webdriver.Chrome(options=chrome_options)
+    return create_attached_chrome_driver(
+        browser_config.debugger_address,
+        browser_config.driver_path,
+        log=print,
+    )
 
 
 def 点击元素(driver: webdriver.Chrome, element, desc: str) -> bool:
@@ -995,6 +1006,26 @@ def 执行自动转发(driver: webdriver.Chrome, config: AppConfig) -> dict:
             "attempted": 0,
             "forwarded": 0,
             "errors": 0,
+            "remark_emoji_filter_enabled": bool(config.forward.only_remark_suffix_emoji),
+            "remark_snapshot_size": 0,
+            "skipped_by_remark_suffix_emoji": 0,
+            "consecutive_forward_failures": 0,
+            "forwarding_stopped_after_failures": False,
+        }
+    if config.forward.forwarding_stopped_after_failures:
+        return {
+            "enabled": True,
+            "scanned": 0,
+            "matched": 0,
+            "already_forwarded": 0,
+            "attempted": 0,
+            "forwarded": 0,
+            "errors": 0,
+            "remark_emoji_filter_enabled": bool(config.forward.only_remark_suffix_emoji),
+            "remark_snapshot_size": 0,
+            "skipped_by_remark_suffix_emoji": 0,
+            "consecutive_forward_failures": config.forward.consecutive_forward_failures,
+            "forwarding_stopped_after_failures": True,
         }
 
     try:
@@ -1002,16 +1033,37 @@ def 执行自动转发(driver: webdriver.Chrome, config: AppConfig) -> dict:
     except ModuleNotFoundError:
         from feed_forward import 执行自动转发候选动态
 
-    return 执行自动转发候选动态(
+    stats = 执行自动转发候选动态(
         driver=driver,
-        watch_uins=config.forward.watch_uins,
         keyword=config.forward.keyword,
         append_text=config.forward.append_text,
         include_forwarded_feeds=config.forward.include_forwarded_feeds,
+        only_remark_suffix_emoji=config.forward.only_remark_suffix_emoji,
+        model_enabled=config.forward.model_enabled,
+        model_endpoint=config.forward.model_endpoint,
+        model_name=config.forward.model_name,
+        model_timeout_seconds=config.forward.model_timeout_seconds,
+        reason_model_endpoint=config.forward.reason_model_endpoint,
+        reason_model_name=config.forward.reason_model_name,
+        reason_model_timeout_seconds=config.forward.reason_model_timeout_seconds,
         scan_limit=config.forward.scan_limit_per_small_round,
         max_forwards=config.forward.max_new_forwards_per_small_round,
         dry_run=False,
     )
+    stats.setdefault("forwarding_stopped_after_failures", False)
+    if stats.get("attempted", 0) > 0:
+        if stats.get("forwarded", 0) > 0:
+            config.forward.consecutive_forward_failures = 0
+        elif stats.get("errors", 0) > 0:
+            config.forward.consecutive_forward_failures += 1
+    stats["consecutive_forward_failures"] = config.forward.consecutive_forward_failures
+    if (
+        stats.get("forwarding_stopped_after_failures")
+        or config.forward.consecutive_forward_failures >= config.forward.stop_forwarding_after_failures
+    ):
+        config.forward.forwarding_stopped_after_failures = True
+        stats["forwarding_stopped_after_failures"] = True
+    return stats
 
 
 def 处理定时任务(driver: webdriver.Chrome, big_round_count: int, config: AppConfig) -> None:
@@ -1038,9 +1090,16 @@ def 处理定时任务(driver: webdriver.Chrome, big_round_count: int, config: A
 
 
 def 打印配置摘要(config: AppConfig) -> None:
+    _compatible, detail = explain_driver_compatibility(
+        config.browser.debugger_address,
+        config.browser.driver_path,
+    )
+
     print("\n当前配置")
     print(f"  调试浏览器: {config.browser.debugger_address}")
     print(f"  ChromeDriver: {config.browser.driver_path}")
+    if detail:
+        print(f"  驱动状态: {detail}")
     print(
         f"  轮次: 每大轮最多 {config.loop.max_small_rounds} 小轮, "
         f"连续空闲 {config.loop.max_idle_small_rounds} 小轮结束"
@@ -1058,18 +1117,16 @@ def 打印配置摘要(config: AppConfig) -> None:
         f"好友保存/{config.tasks.friend_save_interval_big_rounds}, "
         f"好友对比/{config.tasks.friend_compare_interval_big_rounds}"
     )
-    if config.forward.enabled and config.forward.watch_uins:
+    if config.forward.enabled:
         print(
-            f"  自动转发: 已启用, 目标QQ {len(config.forward.watch_uins)} 个, "
-            f"关键词“{config.forward.keyword or '不限'}”, 附加文案“{config.forward.append_text}”, "
-            f"列表转发动态{'允许' if config.forward.include_forwarded_feeds else '不转发'}"
+            f"  自动转发: 已启用, "
+            f"屏蔽关键词“{config.forward.keyword or '无'}”, 附加文案“{config.forward.append_text}”, "
+            f"列表转发动态{'允许' if config.forward.include_forwarded_feeds else '不转发'}, "
+            f"仅备注尾表情{'开启' if config.forward.only_remark_suffix_emoji else '关闭'}, "
+            f"本地模型判断{'开启' if config.forward.model_enabled else '关闭'}"
         )
-    elif config.forward.enabled:
-        print(
-            f"  自动转发: 已启用, 目标QQ 不限, "
-            f"关键词“{config.forward.keyword or '不限'}”, 附加文案“{config.forward.append_text}”, "
-            f"列表转发动态{'允许' if config.forward.include_forwarded_feeds else '不转发'}"
-        )
+        if not config.forward.model_enabled:
+            print("  自动转发说明: 未开启本地模型时，不会新增转发。")
     else:
         print("  自动转发: 未启用")
 
@@ -1081,120 +1138,163 @@ def 自动点赞循环(
 ) -> None:
     big_round_count = 0
     refresh_fail_count = 0
+    total_effective_likes = 0
 
-    while True:
-        if stop_event is not None and stop_event.is_set():
-            print("\n收到停止信号，程序准备退出。")
-            break
-
-        if config.loop.max_big_rounds is not None and big_round_count >= config.loop.max_big_rounds:
-            print(f"\n已达到设定的大轮上限 {config.loop.max_big_rounds}，程序退出")
-            break
-
-        big_round_count += 1
-        print(f"\n=== 开始第 {big_round_count} 大轮自动点赞 ===")
-        idle_small_rounds = 0
-
-        for small_round_index in range(config.loop.max_small_rounds):
+    try:
+        while True:
             if stop_event is not None and stop_event.is_set():
-                print("\n收到停止信号，本大轮提前结束。")
+                print("\n收到停止信号，程序准备退出。")
                 break
 
-            print(f"\n--- 第 {small_round_index + 1} 小轮扫描点赞 ---")
-            监控当前异常场景(
-                driver,
-                config,
-                stage=f"第 {big_round_count} 大轮第 {small_round_index + 1} 小轮开始",
-            )
+            if config.loop.max_big_rounds is not None and big_round_count >= config.loop.max_big_rounds:
+                print(f"\n已达到设定的大轮上限 {config.loop.max_big_rounds}，程序退出")
+                break
 
-            state_before_round = 获取动态流状态(driver, config.selectors)
-            if state_before_round.praise_count == 0:
-                print(
-                    "当前页面没有可点赞按钮，尝试恢复点赞流："
-                    f"页签={state_before_round.tab_text or '未知'}，"
-                    f"动态={state_before_round.dynamic_count}"
-                )
-                if not 尝试恢复点赞流(driver, config, require_praise=True):
-                    记录异常现象(
-                        category="点赞流中断",
-                        reason="当前页面没有可点赞按钮，且恢复流程未能找回点赞流。",
-                        symptom="程序检测到动态页无点赞按钮，执行恢复后仍未恢复出可点赞状态。",
-                        driver=driver,
-                        selectors=config.selectors,
-                        dedupe_key="recover_praise_flow_failed",
-                    )
+            big_round_count += 1
+            print(f"\n=== 开始第 {big_round_count} 大轮自动点赞 ===")
+            idle_small_rounds = 0
 
-            forward_stats = 执行自动转发(driver, config)
-            if forward_stats.get("enabled"):
-                print(
-                    "本小轮转发："
-                    f"扫描 {forward_stats.get('scanned', 0)} / "
-                    f"命中 {forward_stats.get('matched', 0)} / "
-                    f"已跳过 {forward_stats.get('already_forwarded', 0)} / "
-                    f"尝试 {forward_stats.get('attempted', 0)} / "
-                    f"成功 {forward_stats.get('forwarded', 0)} / "
-                    f"错误 {forward_stats.get('errors', 0)}"
+            for small_round_index in range(config.loop.max_small_rounds):
+                if stop_event is not None and stop_event.is_set():
+                    print("\n收到停止信号，本大轮提前结束。")
+                    break
+
+                print(f"\n--- 第 {small_round_index + 1} 小轮扫描点赞 ---")
+                监控当前异常场景(
+                    driver,
+                    config,
+                    stage=f"第 {big_round_count} 大轮第 {small_round_index + 1} 小轮开始",
                 )
-                for item in forward_stats.get("preview", [])[:2]:
+
+                state_before_round = 获取动态流状态(driver, config.selectors)
+                if state_before_round.praise_count == 0:
                     print(
-                        "  转发候选："
-                        f"{item.get('actor_name') or '(未知作者)'} "
-                        f"actor={item.get('actor_uin') or '-'} "
-                        f"[{item.get('card_type') or 'unknown'}]"
-                        f"{' 已转发过' if item.get('already_forwarded') else ''}"
+                        "当前页面没有可点赞按钮，尝试恢复点赞流："
+                        f"页签={state_before_round.tab_text or '未知'}，"
+                        f"动态={state_before_round.dynamic_count}"
                     )
+                    if not 尝试恢复点赞流(driver, config, require_praise=True):
+                        记录异常现象(
+                            category="点赞流中断",
+                            reason="当前页面没有可点赞按钮，且恢复流程未能找回点赞流。",
+                            symptom="程序检测到动态页无点赞按钮，执行恢复后仍未恢复出可点赞状态。",
+                            driver=driver,
+                            selectors=config.selectors,
+                            dedupe_key="recover_praise_flow_failed",
+                        )
 
-            if forward_stats.get("enabled") and forward_stats.get("attempted", 0) > 0:
-                print("本小轮已尝试转发，暂停点赞和下滑，等待下一小轮重新扫描页面状态。")
-                time.sleep(1.0)
-                continue
+                forward_stats = 执行自动转发(driver, config)
+                if forward_stats.get("enabled"):
+                    print(
+                        "本小轮转发："
+                        f"扫描 {forward_stats.get('scanned', 0)} / "
+                        f"命中 {forward_stats.get('matched', 0)} / "
+                        f"已跳过 {forward_stats.get('already_forwarded', 0)} / "
+                        f"尝试 {forward_stats.get('attempted', 0)} / "
+                        f"成功 {forward_stats.get('forwarded', 0)} / "
+                        f"错误 {forward_stats.get('errors', 0)}"
+                    )
+                    if forward_stats.get("remark_emoji_filter_enabled"):
+                        print(
+                            "  备注尾表情限制："
+                            f"快照 {forward_stats.get('remark_snapshot_size', 0)} / "
+                            f"因此跳过 {forward_stats.get('skipped_by_remark_suffix_emoji', 0)}"
+                        )
+                    if forward_stats.get("model_enabled"):
+                        print(
+                            "  本地模型判断："
+                            f"送入 {forward_stats.get('model_checked', 0)} / "
+                            f"选中 {forward_stats.get('model_selected', 0)} / "
+                            f"错误 {forward_stats.get('model_errors', 0)}"
+                        )
+                        if forward_stats.get("model_error"):
+                            print(f"  本地模型错误：{forward_stats.get('model_error')}")
+                        if forward_stats.get("reason_model_checked", 0) > 0:
+                            print(
+                                "  理由模型："
+                                f"送入 {forward_stats.get('reason_model_checked', 0)} / "
+                                f"错误 {forward_stats.get('reason_model_errors', 0)}"
+                            )
+                        if forward_stats.get("reason_model_error"):
+                            print(f"  理由模型错误：{forward_stats.get('reason_model_error')}")
+                    if forward_stats.get("consecutive_forward_failures"):
+                        print(
+                            "  连续转发失败："
+                            f"{forward_stats.get('consecutive_forward_failures', 0)} / "
+                            f"{config.forward.stop_forwarding_after_failures}"
+                        )
+                    if forward_stats.get("forwarding_stopped_after_failures"):
+                        print("  已连续两次转发失败，本次运行停止自动转发，继续执行点赞和下滑。")
+                    for item in forward_stats.get("preview", [])[:2]:
+                        print(
+                            "  转发候选："
+                            f"{item.get('actor_name') or '(未知作者)'} "
+                            f"remark={item.get('actor_remark') or '-'} "
+                            f"actor={item.get('actor_uin') or '-'} "
+                            f"[{item.get('card_type') or 'unknown'}]"
+                            f"{' 已转发过' if item.get('already_forwarded') else ''}"
+                        )
+                        if item.get("model_reason"):
+                            print(f"    模型理由：{item.get('model_reason')}")
 
-            like_stats = 执行点赞(driver, config)
-            effective_likes = like_stats.effective if config.like.verify_after_click else like_stats.clicked
+                if (
+                    forward_stats.get("enabled")
+                    and forward_stats.get("attempted", 0) > 0
+                    and not forward_stats.get("forwarding_stopped_after_failures")
+                ):
+                    print("本小轮已尝试转发，暂停点赞和下滑，等待下一小轮重新扫描页面状态。")
+                    time.sleep(1.0)
+                    continue
 
-            print(
-                "本小轮点赞："
-                f"按钮 {like_stats.found_buttons} / "
-                f"点击 {like_stats.clicked} / "
-                f"生效 {like_stats.effective} / "
-                f"疑似被取消 {like_stats.canceled} / "
-                f"已跳过 {like_stats.skipped_already_liked} / "
-                f"错误 {like_stats.errors}"
-            )
+                like_stats = 执行点赞(driver, config)
+                effective_likes = like_stats.effective if config.like.verify_after_click else like_stats.clicked
+                total_effective_likes += like_stats.effective
 
-            if like_stats.canceled > 0:
-                print("检测到疑似风控取消，本轮已按“生效点赞数”判断是否继续。")
+                print(
+                    "本小轮点赞："
+                    f"按钮 {like_stats.found_buttons} / "
+                    f"点击 {like_stats.clicked} / "
+                    f"生效 {like_stats.effective} / "
+                    f"疑似被取消 {like_stats.canceled} / "
+                    f"已跳过 {like_stats.skipped_already_liked} / "
+                    f"错误 {like_stats.errors}"
+                )
 
-            if effective_likes == 0:
-                idle_small_rounds += 1
-            else:
-                idle_small_rounds = 0
+                if like_stats.canceled > 0:
+                    print("检测到疑似风控取消，本轮已按“生效点赞数”判断是否继续。")
 
-            if idle_small_rounds >= config.loop.max_idle_small_rounds:
-                print(f"\n连续 {idle_small_rounds} 小轮无新点赞 -> 本大轮结束")
+                if effective_likes == 0:
+                    idle_small_rounds += 1
+                else:
+                    idle_small_rounds = 0
+
+                if idle_small_rounds >= config.loop.max_idle_small_rounds:
+                    print(f"\n连续 {idle_small_rounds} 小轮无新点赞 -> 本大轮结束")
+                    break
+
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                if 等待可中断(config.loop.scroll_pause_seconds, stop_event):
+                    print("\n收到停止信号，停止滚动等待。")
+                    break
+
+            回到顶部(driver, config.selectors)
+            refresh_fail_count = 刷新动态页(driver, refresh_fail_count, config)
+            处理定时任务(driver, big_round_count, config)
+
+            if stop_event is not None and stop_event.is_set():
+                print("\n收到停止信号，程序退出。")
                 break
 
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            if 等待可中断(config.loop.scroll_pause_seconds, stop_event):
-                print("\n收到停止信号，停止滚动等待。")
+            if config.loop.max_big_rounds is not None and big_round_count >= config.loop.max_big_rounds:
+                print(f"\n已完成设定的 {config.loop.max_big_rounds} 大轮，程序退出")
                 break
 
-        回到顶部(driver, config.selectors)
-        refresh_fail_count = 刷新动态页(driver, refresh_fail_count, config)
-        处理定时任务(driver, big_round_count, config)
-
-        if stop_event is not None and stop_event.is_set():
-            print("\n收到停止信号，程序退出。")
-            break
-
-        if config.loop.max_big_rounds is not None and big_round_count >= config.loop.max_big_rounds:
-            print(f"\n已完成设定的 {config.loop.max_big_rounds} 大轮，程序退出")
-            break
-
-        print(f"等待 {config.loop.wait_between_big_rounds_seconds} 秒后开始下一大轮...\n")
-        if 等待可中断(config.loop.wait_between_big_rounds_seconds, stop_event):
-            print("\n收到停止信号，结束大轮等待。")
-            break
+            print(f"等待 {config.loop.wait_between_big_rounds_seconds} 秒后开始下一大轮...\n")
+            if 等待可中断(config.loop.wait_between_big_rounds_seconds, stop_event):
+                print("\n收到停止信号，结束大轮等待。")
+                break
+    finally:
+        print(f"\n本次运行累计成功点赞 {total_effective_likes}")
 
 
 def 构建参数解析器() -> argparse.ArgumentParser:
