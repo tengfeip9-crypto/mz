@@ -46,6 +46,8 @@
 
 通常是因为还没有先运行 `1_start_qzone_chrome.bat`，或者 Chrome 没有正常启动。
 
+如果提示 `ChromeDriver only supports Chrome version ...`，说明本地旧驱动和当前 Chrome 主版本不一致。新版程序会优先自动回退到 Selenium Manager；如果你仍在旧版程序上，可以先清空 `.env` 里的 `MZ_CHROMEDRIVER_PATH`，或换成和 Chrome 主版本一致的驱动。
+
 ### 2. Chrome 没有打开
 
 默认脚本会优先尝试这些路径：

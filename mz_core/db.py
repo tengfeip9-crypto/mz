@@ -30,8 +30,11 @@ except ModuleNotFoundError:
     )
 
 
+前列记录路径 = r"C:\Users\tengf\Desktop\前列.txt"
+
+
 def 读取最新两个快照路径() -> tuple[str | None, str | None]:
-    snapshot_paths = list_snapshot_paths(skip_empty=True)
+    snapshot_paths = list_snapshot_paths(skip_empty=True, limit=2)
     if len(snapshot_paths) < 2:
         return None, None
     return snapshot_paths[-2], snapshot_paths[-1]
@@ -110,6 +113,20 @@ def 写入对比日志(previous_path: str, latest_path: str, 增加, 减少, 备
     return log_path
 
 
+def 追加写入前列记录(减少) -> None:
+    if not 减少:
+        return
+
+    parent = os.path.dirname(前列记录路径)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+    timestamp = now_iso()
+    with open(前列记录路径, "a", encoding="utf-8") as fh:
+        for item in 减少:
+            fh.write(f"{item['uin']}  {friend_display_name(item)}{timestamp}\n")
+
+
 def 更新对比状态(previous_path: str, latest_path: str, 增加, 减少, 备注变更) -> None:
     save_json(
         {
@@ -154,6 +171,7 @@ def 主程序():
         print("信息变化：", [f"{item['uin']} {friend_display_name(item['old'])} -> {friend_display_name(item['new'])}" for item in 备注变更])
 
     log_path = 写入对比日志(previous_path, latest_path, 增加, 减少, 备注变更)
+    追加写入前列记录(减少)
     更新对比状态(previous_path, latest_path, 增加, 减少, 备注变更)
     print(f"对比日志已保存: {log_path}")
 

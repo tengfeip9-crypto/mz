@@ -18,6 +18,7 @@ from tkinter import filedialog, messagebox, ttk
 from app_runtime import APP_BASE_DIR
 from mz_env_settings import load_env_settings, save_env_settings
 from mz_user_settings import LauncherSettings, load_settings, save_settings
+from mz_core.runtime_cleanup import clear_build_artifacts, clear_runtime_history
 
 
 class QueueWriter:
@@ -65,11 +66,23 @@ class MZControlPanel:
         self.auto_forward_include_forwarded_var = tk.BooleanVar(
             value=settings.auto_forward_include_forwarded_feeds
         )
+        self.auto_forward_only_remark_suffix_emoji_var = tk.BooleanVar(
+            value=settings.auto_forward_only_remark_suffix_emoji
+        )
         self.auto_forward_model_enabled_var = tk.BooleanVar(value=settings.auto_forward_model_enabled)
         self.auto_forward_model_endpoint_var = tk.StringVar(value=settings.auto_forward_model_endpoint)
         self.auto_forward_model_name_var = tk.StringVar(value=settings.auto_forward_model_name)
         self.auto_forward_model_timeout_var = tk.StringVar(
             value=str(settings.auto_forward_model_timeout_seconds)
+        )
+        self.auto_forward_reason_model_endpoint_var = tk.StringVar(
+            value=settings.auto_forward_reason_model_endpoint
+        )
+        self.auto_forward_reason_model_name_var = tk.StringVar(
+            value=settings.auto_forward_reason_model_name
+        )
+        self.auto_forward_reason_model_timeout_var = tk.StringVar(
+            value=str(settings.auto_forward_reason_model_timeout_seconds)
         )
         self.status_var = tk.StringVar(value="就绪")
         self.image_summary_var = tk.StringVar(value="未配置图片")
@@ -78,6 +91,7 @@ class MZControlPanel:
         self.auto_post_content: tk.Text | None = None
         self.image_listbox: tk.Listbox | None = None
         self.detail_pages: dict[str, ttk.Frame] = {}
+        self.detail_page_canvases: dict[str, tk.Canvas] = {}
         self.detail_back_button: ttk.Button | None = None
 
         self._build_ui()
@@ -154,6 +168,8 @@ class MZControlPanel:
         ttk.Button(folder_frame, text="打开好友列表导出目录", command=self._open_exports_folder).pack(fill="x", pady=4)
         ttk.Button(folder_frame, text="打开好友对比日志目录", command=self._open_logs_folder).pack(fill="x", pady=4)
         ttk.Button(folder_frame, text="打开好友快照目录", command=self._open_snapshots_folder).pack(fill="x", pady=4)
+        ttk.Button(folder_frame, text="清空运行历史", command=self._clear_runtime_history).pack(fill="x", pady=(10, 4))
+        ttk.Button(folder_frame, text="清理构建缓存", command=self._clear_build_artifacts).pack(fill="x", pady=4)
 
         action_frame = ttk.LabelFrame(left, text="操作", padding=12)
         action_frame.pack(fill="x", pady=(14, 0))
@@ -194,11 +210,9 @@ class MZControlPanel:
         detail_body.rowconfigure(0, weight=1)
         detail_body.columnconfigure(0, weight=1)
 
-        home_page = ttk.Frame(detail_body)
-        home_page.grid(row=0, column=0, sticky="nsew")
+        home_page = self._create_scrollable_detail_page(detail_body, "home")
         home_page.columnconfigure(0, weight=1)
         home_page.columnconfigure(1, weight=1)
-        self.detail_pages["home"] = home_page
 
         ttk.Label(
             home_page,
@@ -242,12 +256,10 @@ class MZControlPanel:
             command=lambda: self._show_detail_page("auto_forward"),
         ).grid(row=1, column=0, sticky="ew", pady=(14, 0))
 
-        auto_post_page = ttk.Frame(detail_body)
-        auto_post_page.grid(row=0, column=0, sticky="nsew")
+        auto_post_page = self._create_scrollable_detail_page(detail_body, "auto_post")
         auto_post_page.rowconfigure(1, weight=3)
         auto_post_page.rowconfigure(2, weight=2)
         auto_post_page.columnconfigure(0, weight=1)
-        self.detail_pages["auto_post"] = auto_post_page
 
         ttk.Label(
             auto_post_page,
@@ -293,10 +305,8 @@ class MZControlPanel:
         ttk.Button(image_buttons, text="移除选中", command=self._remove_selected_images).pack(side="left", padx=(8, 0))
         ttk.Button(image_buttons, text="清空列表", command=self._clear_images).pack(side="left", padx=(8, 0))
 
-        auto_forward_page = ttk.Frame(detail_body)
-        auto_forward_page.grid(row=0, column=0, sticky="nsew")
+        auto_forward_page = self._create_scrollable_detail_page(detail_body, "auto_forward")
         auto_forward_page.columnconfigure(1, weight=1)
-        self.detail_pages["auto_forward"] = auto_forward_page
 
         ttk.Label(
             auto_forward_page,
@@ -309,49 +319,84 @@ class MZControlPanel:
             text="启用动态自动转发",
             variable=self.auto_forward_enabled_var,
         ).grid(row=1, column=0, columnspan=2, sticky="w")
-        ttk.Label(auto_forward_page, text="屏蔽关键词").grid(row=2, column=0, sticky="w", padx=(0, 10), pady=(10, 4))
-        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_keyword_var).grid(row=2, column=1, sticky="ew", pady=(10, 4))
+        ttk.Checkbutton(
+            auto_forward_page,
+            text="仅自动转发备注名末尾带 emoji 表情的好友动态",
+            variable=self.auto_forward_only_remark_suffix_emoji_var,
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Label(
+            auto_forward_page,
+            text="开启后会读取最新好友快照里的备注名；只有备注名最后一个字符组带表情的好友才会进入自动转发候选。",
+            wraplength=520,
+            justify="left",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        ttk.Label(auto_forward_page, text="屏蔽关键词").grid(row=4, column=0, sticky="w", padx=(0, 10), pady=(10, 4))
+        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_keyword_var).grid(row=4, column=1, sticky="ew", pady=(10, 4))
         ttk.Label(auto_forward_page, text="支持换行、逗号、顿号分隔；命中这些关键词的动态会直接跳过。").grid(
-            row=3,
+            row=5,
             column=1,
             sticky="w",
             pady=(0, 8),
         )
-        ttk.Label(auto_forward_page, text="附加文案").grid(row=4, column=0, sticky="w", padx=(0, 10), pady=4)
-        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_append_text_var).grid(row=4, column=1, sticky="ew", pady=4)
+        ttk.Label(auto_forward_page, text="附加文案").grid(row=6, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_append_text_var).grid(row=6, column=1, sticky="ew", pady=4)
         ttk.Checkbutton(
             auto_forward_page,
             text="允许转发列表里本身就是转发的动态",
             variable=self.auto_forward_include_forwarded_var,
-        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ).grid(row=7, column=0, columnspan=2, sticky="w", pady=(8, 0))
         ttk.Checkbutton(
             auto_forward_page,
             text="启用本地模型判断是否转发",
             variable=self.auto_forward_model_enabled_var,
-        ).grid(row=6, column=0, columnspan=2, sticky="w", pady=(14, 0))
-        ttk.Label(auto_forward_page, text="模型接口地址").grid(row=7, column=0, sticky="w", padx=(0, 10), pady=4)
+        ).grid(row=8, column=0, columnspan=2, sticky="w", pady=(14, 0))
+        ttk.Label(auto_forward_page, text="模型接口地址").grid(row=9, column=0, sticky="w", padx=(0, 10), pady=4)
         ttk.Entry(auto_forward_page, textvariable=self.auto_forward_model_endpoint_var).grid(
-            row=7,
-            column=1,
-            sticky="ew",
-            pady=4,
-        )
-        ttk.Label(auto_forward_page, text="模型名称").grid(row=8, column=0, sticky="w", padx=(0, 10), pady=4)
-        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_model_name_var).grid(
-            row=8,
-            column=1,
-            sticky="ew",
-            pady=4,
-        )
-        ttk.Label(auto_forward_page, text="超时秒数").grid(row=9, column=0, sticky="w", padx=(0, 10), pady=4)
-        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_model_timeout_var).grid(
             row=9,
             column=1,
             sticky="ew",
             pady=4,
         )
-        ttk.Label(auto_forward_page, text="启用后会把未命中屏蔽关键词且含文字的候选动态交给模型判断。").grid(
+        ttk.Label(auto_forward_page, text="模型名称").grid(row=10, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_model_name_var).grid(
             row=10,
+            column=1,
+            sticky="ew",
+            pady=4,
+        )
+        ttk.Label(auto_forward_page, text="超时秒数").grid(row=11, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_model_timeout_var).grid(
+            row=11,
+            column=1,
+            sticky="ew",
+            pady=4,
+        )
+        ttk.Label(auto_forward_page, text="理由模型接口地址").grid(row=12, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_reason_model_endpoint_var).grid(
+            row=12,
+            column=1,
+            sticky="ew",
+            pady=4,
+        )
+        ttk.Label(auto_forward_page, text="理由模型名称").grid(row=13, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_reason_model_name_var).grid(
+            row=13,
+            column=1,
+            sticky="ew",
+            pady=4,
+        )
+        ttk.Label(auto_forward_page, text="理由模型超时秒数").grid(row=14, column=0, sticky="w", padx=(0, 10), pady=4)
+        ttk.Entry(auto_forward_page, textvariable=self.auto_forward_reason_model_timeout_var).grid(
+            row=14,
+            column=1,
+            sticky="ew",
+            pady=4,
+        )
+        ttk.Label(
+            auto_forward_page,
+            text="启用后会先用判定模型决定是否转发，再用理由模型给每条候选生成复盘理由，并写入运行日志目录里的新 txt 文件。",
+        ).grid(
+            row=15,
             column=1,
             sticky="w",
             pady=(0, 8),
@@ -378,8 +423,46 @@ class MZControlPanel:
             "auto_forward": "自动转发配置",
         }
         self.detail_title_var.set(titles[page_name])
+        canvas = self.detail_page_canvases.get(page_name)
+        if canvas is not None:
+            canvas.yview_moveto(0)
         if self.detail_back_button is not None:
             self.detail_back_button.config(state="disabled" if page_name == "home" else "normal")
+
+    def _create_scrollable_detail_page(self, parent: ttk.Frame, page_name: str) -> ttk.Frame:
+        page_shell = ttk.Frame(parent)
+        page_shell.grid(row=0, column=0, sticky="nsew")
+        page_shell.rowconfigure(0, weight=1)
+        page_shell.columnconfigure(0, weight=1)
+
+        canvas = tk.Canvas(
+            page_shell,
+            highlightthickness=0,
+            borderwidth=0,
+            background=self.root.cget("background"),
+        )
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(page_shell, orient="vertical", command=canvas.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        content = ttk.Frame(canvas)
+        window_id = canvas.create_window((0, 0), window=content, anchor="nw")
+
+        def _sync_scrollregion(_event=None) -> None:
+            bbox = canvas.bbox("all")
+            if bbox is not None:
+                canvas.configure(scrollregion=bbox)
+
+        def _fit_width(event) -> None:
+            canvas.itemconfigure(window_id, width=event.width)
+
+        content.bind("<Configure>", _sync_scrollregion)
+        canvas.bind("<Configure>", _fit_width)
+
+        self.detail_pages[page_name] = page_shell
+        self.detail_page_canvases[page_name] = canvas
+        return content
 
     def _grid_entry(self, parent: ttk.LabelFrame, row: int, label: str, variable: tk.StringVar) -> None:
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=(0, 10), pady=4)
@@ -436,17 +519,23 @@ class MZControlPanel:
         self.image_summary_var.set(f"已配置 {total} 张图片，列表中显示的是完整路径。")
 
     def _friend_data_root(self) -> Path:
+        return self._runtime_root("MZ_FRIEND_DATA_DIR", "friend_data")
+
+    def _run_log_root(self) -> Path:
+        return self._runtime_root("MZ_RUN_LOG_DIR", "run_logs")
+
+    def _runtime_root(self, env_key: str, legacy_name: str) -> Path:
         env_values = load_env_settings()
-        configured = env_values.get("MZ_FRIEND_DATA_DIR", "").strip()
+        configured = env_values.get(env_key, "").strip()
         if configured:
             path = Path(os.path.expandvars(os.path.expanduser(configured)))
             if not path.is_absolute():
                 path = APP_BASE_DIR / path
             return path
-        legacy = APP_BASE_DIR / "friend_data"
+        legacy = APP_BASE_DIR / legacy_name
         if legacy.exists():
             return legacy
-        return APP_BASE_DIR / ".local" / "friend_data"
+        return APP_BASE_DIR / ".local" / legacy_name
 
     def _open_folder(self, path: Path) -> None:
         path.mkdir(parents=True, exist_ok=True)
@@ -463,6 +552,36 @@ class MZControlPanel:
 
     def _open_snapshots_folder(self) -> None:
         self._open_folder(self._friend_data_root() / "snapshots")
+
+    def _clear_runtime_history(self) -> None:
+        confirmed = messagebox.askyesno(
+            "清空运行历史",
+            "这会删除好友快照、导出文件、对比日志，以及自动转发历史记录。是否继续？",
+            parent=self.root,
+        )
+        if not confirmed:
+            return
+
+        stats = clear_runtime_history(self._friend_data_root(), self._run_log_root())
+        summary = stats.summary_text()
+        self.status_var.set("运行历史已清空")
+        self._append_log(f"运行历史清理完成：{summary}\n")
+        messagebox.showinfo("清理完成", summary, parent=self.root)
+
+    def _clear_build_artifacts(self) -> None:
+        confirmed = messagebox.askyesno(
+            "清理构建缓存",
+            "这会删除 build 目录和各处 __pycache__ 缓存目录。是否继续？",
+            parent=self.root,
+        )
+        if not confirmed:
+            return
+
+        stats = clear_build_artifacts(APP_BASE_DIR)
+        summary = stats.summary_text()
+        self.status_var.set("构建缓存已清理")
+        self._append_log(f"构建缓存清理完成：{summary}\n")
+        messagebox.showinfo("清理完成", summary, parent=self.root)
 
     def _collect_settings(self) -> tuple[dict[str, str], LauncherSettings]:
         env_values = load_env_settings()
@@ -506,10 +625,16 @@ class MZControlPanel:
         auto_forward_model_enabled = bool(self.auto_forward_model_enabled_var.get())
         auto_forward_model_endpoint = self.auto_forward_model_endpoint_var.get().strip()
         auto_forward_model_name = self.auto_forward_model_name_var.get().strip()
+        auto_forward_reason_model_endpoint = self.auto_forward_reason_model_endpoint_var.get().strip()
+        auto_forward_reason_model_name = self.auto_forward_reason_model_name_var.get().strip()
         if auto_forward_model_enabled and not auto_forward_model_endpoint:
             raise ValueError("启用本地模型判断时，请填写模型接口地址。")
         if auto_forward_model_enabled and not auto_forward_model_name:
             raise ValueError("启用本地模型判断时，请填写模型名称。")
+        if auto_forward_model_enabled and not auto_forward_reason_model_endpoint:
+            raise ValueError("启用本地模型判断时，请填写理由模型接口地址。")
+        if auto_forward_model_enabled and not auto_forward_reason_model_name:
+            raise ValueError("启用本地模型判断时，请填写理由模型名称。")
         settings = LauncherSettings(
             auto_post_interval_big_rounds=require_non_negative_int("自动说说轮数", self.auto_post_round_var.get().strip()),
             friend_compare_interval_big_rounds=require_non_negative_int("好友对比轮数", self.friend_compare_round_var.get().strip()),
@@ -523,12 +648,19 @@ class MZControlPanel:
             auto_forward_keyword=self.auto_forward_keyword_var.get().strip(),
             auto_forward_append_text=self.auto_forward_append_text_var.get().strip(),
             auto_forward_include_forwarded_feeds=bool(self.auto_forward_include_forwarded_var.get()),
+            auto_forward_only_remark_suffix_emoji=bool(self.auto_forward_only_remark_suffix_emoji_var.get()),
             auto_forward_model_enabled=auto_forward_model_enabled,
             auto_forward_model_endpoint=auto_forward_model_endpoint,
             auto_forward_model_name=auto_forward_model_name,
             auto_forward_model_timeout_seconds=require_positive_float(
                 "本地模型超时秒数",
                 self.auto_forward_model_timeout_var.get().strip(),
+            ),
+            auto_forward_reason_model_endpoint=auto_forward_reason_model_endpoint,
+            auto_forward_reason_model_name=auto_forward_reason_model_name,
+            auto_forward_reason_model_timeout_seconds=require_positive_float(
+                "理由模型超时秒数",
+                self.auto_forward_reason_model_timeout_var.get().strip(),
             ),
         )
         return env_values, settings
@@ -573,43 +705,52 @@ class MZControlPanel:
     def _ensure_local_model_server(self, settings: LauncherSettings) -> None:
         if not settings.auto_forward_model_enabled:
             return
-        endpoint = settings.auto_forward_model_endpoint.strip()
-        if self._endpoint_port_is_open(endpoint):
-            self._append_log(f"本地模型接口已就绪：{endpoint}\n")
-            return
+        endpoints = []
+        for endpoint in (
+            settings.auto_forward_model_endpoint.strip(),
+            settings.auto_forward_reason_model_endpoint.strip(),
+        ):
+            if endpoint and endpoint not in endpoints:
+                endpoints.append(endpoint)
 
-        parsed = urlparse(endpoint)
-        host = parsed.hostname or ""
-        port = parsed.port or 0
-        if host not in {"127.0.0.1", "localhost"} or port != 1234:
-            raise RuntimeError(f"本地模型接口未就绪：{endpoint}")
-
-        lms_cli = self._find_lm_studio_cli()
-        if lms_cli is None:
-            raise RuntimeError("未找到 LM Studio CLI，请先在 LM Studio 里启动本地服务器。")
-
-        self._append_log("本地模型接口未就绪，正在尝试启动 LM Studio Server...\n")
-        result = subprocess.run(
-            [str(lms_cli), "server", "start"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=30,
-        )
-        output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
-        if output:
-            self._append_log(output + "\n")
-        if result.returncode != 0:
-            raise RuntimeError("LM Studio Server 启动失败，请在 LM Studio 界面手动开启 Local Server。")
-
-        deadline = time.time() + 10
-        while time.time() < deadline:
+        for endpoint in endpoints:
             if self._endpoint_port_is_open(endpoint):
-                self._append_log(f"本地模型接口已启动：{endpoint}\n")
-                return
-            time.sleep(0.5)
-        raise RuntimeError(f"LM Studio Server 已尝试启动，但接口仍未响应：{endpoint}")
+                self._append_log(f"本地模型接口已就绪：{endpoint}\n")
+                continue
+
+            parsed = urlparse(endpoint)
+            host = parsed.hostname or ""
+            port = parsed.port or 0
+            if host not in {"127.0.0.1", "localhost"} or port != 1234:
+                raise RuntimeError(f"本地模型接口未就绪：{endpoint}")
+
+            lms_cli = self._find_lm_studio_cli()
+            if lms_cli is None:
+                raise RuntimeError("未找到 LM Studio CLI，请先在 LM Studio 里启动本地服务器。")
+
+            self._append_log("本地模型接口未就绪，正在尝试启动 LM Studio Server...\n")
+            result = subprocess.run(
+                [str(lms_cli), "server", "start"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+            )
+            output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
+            if output:
+                self._append_log(output + "\n")
+            if result.returncode != 0:
+                raise RuntimeError("LM Studio Server 启动失败，请在 LM Studio 界面手动开启 Local Server。")
+
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                if self._endpoint_port_is_open(endpoint):
+                    self._append_log(f"本地模型接口已启动：{endpoint}\n")
+                    break
+                time.sleep(0.5)
+            else:
+                raise RuntimeError(f"LM Studio Server 已尝试启动，但接口仍未响应：{endpoint}")
 
     def _launch_debug_chrome(self, env_values: dict[str, str]) -> None:
         debugger_address = env_values.get("MZ_DEBUGGER_ADDRESS", "").strip() or "127.0.0.1:9222"

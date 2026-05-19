@@ -111,7 +111,7 @@ def write_snapshot(snapshot: dict[str, Any], timestamp: str) -> str:
     return path
 
 
-def list_snapshot_paths(skip_empty: bool = False) -> list[str]:
+def list_snapshot_paths(skip_empty: bool = False, limit: int | None = None) -> list[str]:
     ensure_friend_dirs()
     files = [
         os.path.join(SNAPSHOT_DIR, name)
@@ -120,16 +120,23 @@ def list_snapshot_paths(skip_empty: bool = False) -> list[str]:
     ]
     snapshot_paths = sorted(files)
     if not skip_empty:
+        if limit is not None:
+            if limit <= 0:
+                return []
+            return snapshot_paths[-limit:]
         return snapshot_paths
 
     valid_paths: list[str] = []
-    for path in snapshot_paths:
+    for path in reversed(snapshot_paths):
         try:
             if snapshot_has_friends(load_json(path)):
                 valid_paths.append(path)
+                if limit is not None and len(valid_paths) >= limit:
+                    break
         except Exception:
             continue
 
+    valid_paths.reverse()
     return valid_paths
 
 
